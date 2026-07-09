@@ -23,24 +23,28 @@ export default function PositionSizeCalculator() {
     const dollarRiskGoal = accountValue * (riskPercent / 100);
     const riskPerShare = Math.abs(entryPrice - stopPrice);
 
-    const requestedShares =
+    const riskBasedShares =
       riskPerShare > 0 ? Math.floor(dollarRiskGoal / riskPerShare) : 0;
 
     const maxAffordableShares =
       entryPrice > 0 ? Math.floor(accountValue / entryPrice) : 0;
 
     const exceedsBuyingPower =
-      requestedShares > maxAffordableShares && maxAffordableShares > 0;
+      riskBasedShares > maxAffordableShares && maxAffordableShares > 0;
 
-    const shares = exceedsBuyingPower ? maxAffordableShares : requestedShares;
+    const sharesToBuy = exceedsBuyingPower
+      ? maxAffordableShares
+      : riskBasedShares;
 
-    const positionValue = shares * entryPrice;
-    const actualRisk = shares * riskPerShare;
+    const capitalRequired = riskBasedShares * entryPrice;
+    const capitalUsed = sharesToBuy * entryPrice;
+    const actualRisk = sharesToBuy * riskPerShare;
+
     const actualRiskPercent =
       accountValue > 0 ? (actualRisk / accountValue) * 100 : 0;
 
     const buyingPowerUsed =
-      accountValue > 0 ? (positionValue / accountValue) * 100 : 0;
+      accountValue > 0 ? (capitalUsed / accountValue) * 100 : 0;
 
     const rewardPerShare =
       targetPrice > 0
@@ -49,15 +53,13 @@ export default function PositionSizeCalculator() {
           : entryPrice - targetPrice
         : 0;
 
-    const potentialProfitLoss = shares * rewardPerShare;
+    const potentialProfitLoss = sharesToBuy * rewardPerShare;
     const validRewardPerShare = Math.max(rewardPerShare, 0);
 
     const rr =
       actualRisk > 0 && validRewardPerShare > 0
-        ? (shares * validRewardPerShare) / actualRisk
+        ? (sharesToBuy * validRewardPerShare) / actualRisk
         : 0;
-
-    const nearMaxBuyingPower = buyingPowerUsed >= 90 && buyingPowerUsed <= 100;
 
     const validTarget =
       targetPrice > 0
@@ -66,32 +68,29 @@ export default function PositionSizeCalculator() {
           : targetPrice < entryPrice
         : false;
 
-    const tradeRating =
-      rr >= 3
-        ? {
-            label: "Excellent Setup",
-            note: "Strong reward compared to risk.",
-            style: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-          }
+    const nearMaxBuyingPower = buyingPowerUsed >= 90 && buyingPowerUsed <= 100;
+
+    const grade =
+      exceedsBuyingPower || !validTarget
+        ? "D"
+        : rr >= 3 && buyingPowerUsed < 80
+        ? "A+"
         : rr >= 2
-        ? {
-            label: "Good Setup",
-            note: "Reward is solid compared to risk.",
-            style: "border-lime-500/30 bg-lime-500/10 text-lime-300",
-          }
+        ? "A"
         : rr >= 1
-        ? {
-            label: "Fair Setup",
-            note: "Reward is positive, but not ideal.",
-            style: "border-yellow-500/30 bg-yellow-500/10 text-yellow-300",
-          }
-        : {
-            label: "Poor Setup",
-            note: targetPrice > 0
-              ? "Target does not offer enough reward for the risk."
-              : "Add a target to calculate reward.",
-            style: "border-red-500/30 bg-red-500/10 text-red-300",
-          };
+        ? "B"
+        : "C";
+
+    const rating =
+      grade === "A+"
+        ? "Excellent Setup"
+        : grade === "A"
+        ? "Good Setup"
+        : grade === "B"
+        ? "Fair Setup"
+        : grade === "C"
+        ? "Weak Setup"
+        : "Needs Review";
 
     return {
       accountValue,
@@ -101,20 +100,22 @@ export default function PositionSizeCalculator() {
       targetPrice,
       dollarRiskGoal,
       riskPerShare,
-      requestedShares,
+      riskBasedShares,
       maxAffordableShares,
       exceedsBuyingPower,
-      shares,
-      positionValue,
+      sharesToBuy,
+      capitalRequired,
+      capitalUsed,
       actualRisk,
       actualRiskPercent,
       buyingPowerUsed,
       rewardPerShare,
       potentialProfitLoss,
       rr,
-      nearMaxBuyingPower,
       validTarget,
-      tradeRating,
+      nearMaxBuyingPower,
+      grade,
+      rating,
     };
   }, [account, risk, entry, stop, target, direction]);
 
@@ -139,12 +140,16 @@ Entry: ${money(result.entryPrice)}
 Stop: ${money(result.stopPrice)}
 Target: ${result.targetPrice ? money(result.targetPrice) : "Not set"}
 
-Shares: ${result.shares.toLocaleString()}
-Capital Used: ${money(result.positionValue)}
+Shares to Buy: ${result.sharesToBuy.toLocaleString()}
+Risk-Based Shares: ${result.riskBasedShares.toLocaleString()}
+Capital Required: ${money(result.capitalRequired)}
+Capital Used: ${money(result.capitalUsed)}
 Max Loss: ${money(result.actualRisk)}
+Actual Risk: ${result.actualRiskPercent.toFixed(2)}%
 Potential P/L: ${money(result.potentialProfitLoss)}
 Risk/Reward: ${result.rr ? `${result.rr.toFixed(2)}R` : "N/A"}
 Buying Power: ${result.buyingPowerUsed.toFixed(1)}%
+Trade Grade: ${result.grade}
 `.trim();
 
     await navigator.clipboard.writeText(text);
@@ -161,16 +166,16 @@ Buying Power: ${result.buyingPowerUsed.toFixed(1)}%
 
         <section className="mt-8 rounded-3xl border border-zinc-800 bg-zinc-950/80 p-8">
           <p className="mb-4 inline-flex rounded-full border border-emerald-500/30 px-4 py-2 text-sm text-emerald-400">
-            Smart risk calculator
+            Position Size Calculator v3.0
           </p>
 
           <h1 className="max-w-3xl text-4xl font-bold tracking-tight sm:text-6xl">
-            Position Size Calculator
+            Trade smarter before you enter.
           </h1>
 
           <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-400">
-            Plan your trade before you enter. Calculate share size, buying power,
-            max loss, potential profit/loss, and risk-to-reward.
+            Calculate share size, buying power, capital required, max loss,
+            potential profit/loss, and risk-to-reward.
           </p>
         </section>
 
@@ -242,7 +247,11 @@ Buying Power: ${result.buyingPowerUsed.toFixed(1)}%
               <Alert
                 type="danger"
                 title="Position exceeds buying power"
-                message={`Requested size is ${result.requestedShares.toLocaleString()} shares, but your account can afford ${result.maxAffordableShares.toLocaleString()} shares without margin.`}
+                message={`To risk ${result.riskPercent}%, this setup needs ${result.riskBasedShares.toLocaleString()} shares and ${money(
+                  result.capitalRequired
+                )}. Your account can afford ${result.maxAffordableShares.toLocaleString()} shares without margin, so actual risk is ${result.actualRiskPercent.toFixed(
+                  2
+                )}%.`}
               />
             ) : result.nearMaxBuyingPower ? (
               <Alert
@@ -258,7 +267,7 @@ Buying Power: ${result.buyingPowerUsed.toFixed(1)}%
               />
             )}
 
-            <TradeRating rating={result.tradeRating} rr={result.rr} />
+            <TradeGrade grade={result.grade} rating={result.rating} rr={result.rr} />
 
             <RiskVisualization
               direction={direction}
@@ -279,12 +288,12 @@ Buying Power: ${result.buyingPowerUsed.toFixed(1)}%
               <div className="mt-6">
                 <p className="text-sm text-zinc-500">Shares to Buy</p>
                 <p className="mt-2 text-6xl font-bold text-emerald-400">
-                  {result.shares.toLocaleString()}
+                  {result.sharesToBuy.toLocaleString()}
                 </p>
               </div>
 
               <div className="mt-6 grid gap-3">
-                <SummaryRow label="Capital Used" value={money(result.positionValue)} />
+                <SummaryRow label="Capital Used" value={money(result.capitalUsed)} />
                 <SummaryRow label="Maximum Loss" value={money(result.actualRisk)} />
                 <SummaryRow label="Actual Risk %" value={`${result.actualRiskPercent.toFixed(2)}%`} />
                 <SummaryRow
@@ -306,7 +315,8 @@ Buying Power: ${result.buyingPowerUsed.toFixed(1)}%
             </div>
 
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <Result label="Requested Shares" value={result.requestedShares.toLocaleString()} />
+              <Result label="Risk-Based Shares" value={result.riskBasedShares.toLocaleString()} />
+              <Result label="Capital Required" value={money(result.capitalRequired)} />
               <Result label="Max Affordable Shares" value={result.maxAffordableShares.toLocaleString()} />
               <Result label="Dollar Risk Goal" value={money(result.dollarRiskGoal)} />
               <Result label="Risk Per Share" value={money(result.riskPerShare)} />
@@ -383,12 +393,18 @@ function Alert({
   );
 }
 
-function TradeRating({ rating, rr }: { rating: any; rr: number }) {
+function TradeGrade({ grade, rating, rr }: { grade: string; rating: string; rr: number }) {
   return (
-    <div className={`mt-4 rounded-2xl border p-4 ${rating.style}`}>
-      <p className="text-lg font-bold">{rating.label}</p>
-      <p className="mt-1 text-sm opacity-90">
-        {rating.note} {rr > 0 ? `Risk/reward: ${rr.toFixed(2)}R.` : ""}
+    <div className="mt-4 rounded-2xl border border-zinc-800 bg-black p-5">
+      <p className="text-sm text-zinc-500">Trade Rating</p>
+      <div className="mt-2 flex items-center justify-between">
+        <p className="text-2xl font-bold text-white">{rating}</p>
+        <p className="rounded-xl bg-emerald-500 px-4 py-2 text-2xl font-black text-black">
+          {grade}
+        </p>
+      </div>
+      <p className="mt-2 text-sm text-zinc-400">
+        {rr > 0 ? `Risk/reward is ${rr.toFixed(2)}R.` : "Add a valid target to calculate risk/reward."}
       </p>
     </div>
   );
@@ -422,9 +438,7 @@ function RiskVisualization({
   const total = risk + reward || 1;
 
   const riskWidth = Math.max(8, Math.min((risk / total) * 100, 100));
-  const rewardWidth = validTarget
-    ? Math.max(8, Math.min((reward / total) * 100, 100))
-    : 0;
+  const rewardWidth = validTarget ? Math.max(8, Math.min((reward / total) * 100, 100)) : 0;
 
   return (
     <div className="mt-4 rounded-2xl border border-zinc-800 bg-black p-5">
@@ -439,20 +453,9 @@ function RiskVisualization({
       </div>
 
       <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
-        <div>
-          <p className="text-zinc-500">Stop</p>
-          <p className="font-bold text-red-400">{money(stop)}</p>
-        </div>
-        <div>
-          <p className="text-zinc-500">Entry</p>
-          <p className="font-bold text-white">{money(entry)}</p>
-        </div>
-        <div>
-          <p className="text-zinc-500">Target</p>
-          <p className={validTarget ? "font-bold text-emerald-400" : "font-bold text-red-400"}>
-            {money(target)}
-          </p>
-        </div>
+        <PriceMarker label="Stop" value={stop} color="text-red-400" />
+        <PriceMarker label="Entry" value={entry} color="text-white" />
+        <PriceMarker label="Target" value={target} color={validTarget ? "text-emerald-400" : "text-red-400"} />
       </div>
 
       {!validTarget && (
@@ -460,6 +463,15 @@ function RiskVisualization({
           Invalid target: for a {direction} trade, the target is on the wrong side of entry.
         </p>
       )}
+    </div>
+  );
+}
+
+function PriceMarker({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div>
+      <p className="text-zinc-500">{label}</p>
+      <p className={`font-bold ${color}`}>{money(value)}</p>
     </div>
   );
 }
@@ -478,11 +490,7 @@ function SummaryRow({
   return (
     <div className="flex items-center justify-between border-t border-zinc-800 py-3">
       <span className="text-sm text-zinc-500">{label}</span>
-      <span
-        className={`font-bold ${
-          negative ? "text-red-400" : positive ? "text-emerald-400" : "text-white"
-        }`}
-      >
+      <span className={`font-bold ${negative ? "text-red-400" : positive ? "text-emerald-400" : "text-white"}`}>
         {value}
       </span>
     </div>
