@@ -58,19 +58,26 @@ export default function Home() {
         <h2 className="mb-8 text-3xl font-bold">Trading Tools</h2>
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {features.map((feature) => (
-            <div
-              key={feature}
-              className="rounded-2xl border border-zinc-800 bg-zinc-950 p-6 transition hover:border-emerald-500/60"
-            >
-              <div className="mb-4 h-2 w-12 rounded-full bg-emerald-400" />
-              <h3 className="text-xl font-semibold">{feature}</h3>
-              <p className="mt-3 text-sm leading-6 text-zinc-400">
-                A simple, useful tool designed to help traders prepare,
-                research, and manage risk before entering the market.
-              </p>
-            </div>
-          ))}
+          {features.map((feature) => {
+  const isCalculator = feature === "Position Size Calculator";
+
+  return (
+    <a
+      key={feature}
+      href={isCalculator ? "/Tools/position-size" : "#"}
+      className="rounded-2xl border border-zinc-800 bg-zinc-950 p-6 transition hover:-translate-y-1 hover:border-emerald-400"
+    >
+      <div className="mb-4 h-2 w-12 rounded-full bg-emerald-400" />
+
+      <h3 className="text-xl font-semibold">{feature}</h3>
+
+      <p className="mt-3 text-sm leading-6 text-zinc-400">
+        A simple, useful tool designed to help traders prepare, research, and
+        manage risk before entering the market.
+      </p>
+    </a>
+  );
+})}
         </div>
       </section>
 
