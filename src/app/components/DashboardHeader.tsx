@@ -71,7 +71,7 @@ export default function DashboardHeader() {
     <section className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-start">
       <div>
         <h1 className="text-2xl font-bold sm:text-3xl">
-          {greeting}, Davian! ☀️
+          {greeting}! ☀️
         </h1>
 
         <p className="mt-1 text-sm text-slate-400">

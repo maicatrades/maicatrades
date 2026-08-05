@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Bell,
   ChevronRight,
   Menu,
   Search,
@@ -196,7 +195,7 @@ export default function Header({
           })}
         </nav>
 
-        <div className="ml-auto flex items-center gap-1 sm:gap-4">
+        <div className="ml-auto flex items-center">
           <button
             type="button"
             className="flex h-9 w-9 items-center justify-center rounded-full text-slate-300 transition hover:bg-slate-800 hover:text-white"
@@ -204,34 +203,6 @@ export default function Header({
           >
             <Search size={20} />
           </button>
-
-          <button
-            type="button"
-            className="relative flex h-9 w-9 items-center justify-center rounded-full text-slate-300 transition hover:bg-slate-800 hover:text-white"
-            aria-label="Notifications"
-          >
-            <Bell size={19} />
-
-            <span className="absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
-              3
-            </span>
-          </button>
-
-          <div className="hidden items-center gap-2 sm:flex">
-            <div className="text-right">
-              <p className="text-sm font-medium">
-                Davian
-              </p>
-
-              <p className="text-[10px] text-slate-500">
-                Trader
-              </p>
-            </div>
-
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-emerald-300 font-bold text-black">
-              D
-            </div>
-          </div>
         </div>
       </div>
 
