@@ -1216,10 +1216,11 @@ export async function GET(request: Request) {
         .map((symbol) =>
           symbol.trim().toUpperCase(),
         )
-        .filter(
-          (symbol) =>
-            breadthSymbols.includes(symbol),
-        );
+        .filter((symbol) =>
+  (breadthSymbols as readonly string[]).includes(
+    symbol,
+  ),
+);
 
       const uniqueSymbols = [
         ...new Set(requestedSymbols),
