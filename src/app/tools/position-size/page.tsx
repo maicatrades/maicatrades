@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 type Direction = "long" | "short";
@@ -160,13 +161,16 @@ Trade Grade: ${result.grade}
   return (
     <main className="min-h-screen bg-black px-6 py-10 text-white">
       <div className="mx-auto max-w-6xl">
-        <a href="/" className="text-sm text-emerald-400 hover:text-emerald-300">
-          ← Back to MaicaTrades
-        </a>
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center gap-2 text-sm font-medium text-emerald-400 transition hover:text-emerald-300"
+        >
+          ← Back to Dashboard
+        </Link>
 
         <section className="mt-8 rounded-3xl border border-zinc-800 bg-zinc-950/80 p-8">
           <p className="mb-4 inline-flex rounded-full border border-emerald-500/30 px-4 py-2 text-sm text-emerald-400">
-            Position Size Calculator v3.0
+            Position Size Calculator
           </p>
 
           <h1 className="max-w-3xl text-4xl font-bold tracking-tight sm:text-6xl">
