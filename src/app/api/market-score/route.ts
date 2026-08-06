@@ -702,6 +702,144 @@ function calculateVolatilityScore(vix: MarketData) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Market breadth confirmation                                                */
+/* -------------------------------------------------------------------------- */
+
+type MarketBreadthSnapshot = {
+  tradingDate: string;
+  score: number;
+  label: string | null;
+  advancingPercent: number | null;
+  positiveSectorPercent: number | null;
+  updatedAt: string | null;
+};
+
+type BreadthConfirmation = {
+  available: boolean;
+  adjustment: number;
+  scoreCap: number;
+  reason: string;
+  snapshot: MarketBreadthSnapshot | null;
+};
+
+function getBreadthAdjustment(breadthScore: number) {
+  if (breadthScore >= 80) {
+    return {
+      adjustment: 3,
+      scoreCap: 100,
+      reason: "Strong breadth confirms the bullish market structure.",
+    };
+  }
+
+  if (breadthScore >= 65) {
+    return {
+      adjustment: 1,
+      scoreCap: 100,
+      reason: "Healthy breadth provides positive confirmation.",
+    };
+  }
+
+  if (breadthScore >= 50) {
+    return {
+      adjustment: 0,
+      scoreCap: 79,
+      reason:
+        "Mixed breadth prevents an aggressive bullish classification.",
+    };
+  }
+
+  if (breadthScore >= 35) {
+    return {
+      adjustment: -6,
+      scoreCap: 74,
+      reason:
+        "Weak participation reduces confidence in index-level strength.",
+    };
+  }
+
+  return {
+    adjustment: -10,
+    scoreCap: 64,
+    reason:
+      "Very weak participation materially limits the bullish market score.",
+  };
+}
+
+async function getLatestBreadthConfirmation(): Promise<BreadthConfirmation> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("market_breadth_history")
+      .select(
+        "trading_date, breadth_score, breadth_label, advancing_percent, positive_sector_percent, updated_at",
+      )
+      .order("trading_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    const breadthScore = Number(data?.breadth_score);
+
+    if (!data || !Number.isFinite(breadthScore)) {
+      return {
+        available: false,
+        adjustment: 0,
+        scoreCap: 100,
+        reason:
+          "No valid market breadth snapshot was available, so no adjustment was applied.",
+        snapshot: null,
+      };
+    }
+
+    const advancingPercent = Number(data.advancing_percent);
+    const positiveSectorPercent = Number(
+      data.positive_sector_percent,
+    );
+
+    const snapshot: MarketBreadthSnapshot = {
+      tradingDate: data.trading_date,
+      score: round(breadthScore),
+      label: data.breadth_label ?? null,
+      advancingPercent: Number.isFinite(advancingPercent)
+        ? round(advancingPercent)
+        : null,
+      positiveSectorPercent: Number.isFinite(
+        positiveSectorPercent,
+      )
+        ? round(positiveSectorPercent)
+        : null,
+      updatedAt: data.updated_at ?? null,
+    };
+
+    const modifier = getBreadthAdjustment(breadthScore);
+
+    return {
+      available: true,
+      adjustment: modifier.adjustment,
+      scoreCap: modifier.scoreCap,
+      reason: modifier.reason,
+      snapshot,
+    };
+  } catch (error) {
+    console.error(
+      "Unable to retrieve Market Breadth confirmation:",
+      error instanceof Error ? error.message : error,
+    );
+
+    return {
+      available: false,
+      adjustment: 0,
+      scoreCap: 100,
+      reason:
+        "Market breadth confirmation was unavailable, so no adjustment was applied.",
+      snapshot: null,
+    };
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Labels and summary                                                         */
 /* -------------------------------------------------------------------------- */
 
@@ -842,7 +980,16 @@ export async function GET() {
       sectorStrength.score +
       volatility.score;
 
-    const score = Math.round(clamp(rawScore, 0, 100));
+    const breadthConfirmation =
+      await getLatestBreadthConfirmation();
+
+    const adjustedScore = clamp(
+      rawScore + breadthConfirmation.adjustment,
+      0,
+      breadthConfirmation.scoreCap,
+    );
+
+    const score = Math.round(adjustedScore);
     const label = getMarketLabel(score);
     const environment = getEnvironment(score);
 
@@ -950,6 +1097,8 @@ export async function GET() {
         success: true,
         score,
         rawScore: round(rawScore),
+        breadthAdjustedScore: round(adjustedScore),
+        breadthConfirmation,
         label,
         environment,
         previousScore,
@@ -977,6 +1126,12 @@ export async function GET() {
           momentum: 25,
           sectorStrength: 20,
           volatility: 15,
+        },
+        methodology: {
+          baseScore:
+            "Trend, momentum, sector strength, and volatility total 100 possible points.",
+          breadthConfirmation:
+            "The latest 122-stock Market Breadth score applies a confirmation adjustment and may cap the final classification when participation is mixed or weak.",
         },
         dataQuality: {
           status: partialData ? "partial" : "complete",
