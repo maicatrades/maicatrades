@@ -59,11 +59,20 @@ export default function DashboardExtras({
             Quote of the Day
           </p>
 
-          <p className="mt-1 text-sm text-slate-200">
-            “Discipline is choosing between what you want now and what you want
-            most.”
-          </p>
-        </div>
+          
+  <p className="text-xs font-semibold uppercase text-slate-300">
+    Quote of the Day
+  </p>
+
+  <p className="mt-1 text-sm text-slate-200">
+    “Discipline is choosing between what you want now and what
+    you want most.”
+  </p>
+
+  <p className="mt-1 text-xs text-slate-500">
+    — Augusta F. Kantra
+  </p>
+</div>
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-[#09131d] px-5 py-4 shadow-[0_10px_30px_rgba(0,0,0,0.16)]">

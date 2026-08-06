@@ -200,13 +200,14 @@ export default function MarketScorePage() {
               </div>
 
               <h1 className="mt-3 text-3xl font-bold sm:text-4xl">
-                A simplified view of the current market environment
+                Today&apos;s Market Score summarizes the current market environment.
               </h1>
 
               <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400 sm:text-base">
-                The Market Score combines trend, momentum, sector strength, and
-                volatility into one score designed to help traders quickly
-                understand the current environment.
+                Today&apos;s Market Score combines trend, momentum, sector strength, and
+                volatility into one easy-to-read score designed to help swing
+                traders quickly understand today&apos;s market conditions. The
+                metrics below reflect today&apos;s market environment.
               </p>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -243,7 +244,7 @@ export default function MarketScorePage() {
               className={`rounded-2xl border p-8 text-center ${theme.border} ${theme.background}`}
             >
               <p className="text-sm uppercase tracking-[0.2em] text-slate-400">
-                Current score
+                Today&apos;s Score
               </p>
 
               <div className="mt-5 flex items-end justify-center gap-2">
@@ -265,7 +266,7 @@ export default function MarketScorePage() {
               </div>
 
               <p className="mt-4 text-xs text-slate-500">
-                Last updated: {updatedAt}
+                Today&apos;s reading updated: {updatedAt}
               </p>
             </div>
           </div>
@@ -278,7 +279,7 @@ export default function MarketScorePage() {
             </p>
 
             <h2 className="mt-2 text-2xl font-bold">
-              What is driving today&apos;s score
+              What&apos;s driving today&apos;s Market Score
             </h2>
 
             <p className="mt-2 text-sm text-slate-400">
@@ -322,27 +323,27 @@ export default function MarketScorePage() {
           <article className="rounded-xl border border-slate-800 bg-[#09131d] p-6">
             <div className="flex items-center gap-2">
               <Activity size={19} className="text-blue-400" />
-              <h2 className="text-lg font-semibold">Current interpretation</h2>
+              <h2 className="text-lg font-semibold">Today&apos;s Market Outlook</h2>
             </div>
 
             <p className="mt-4 text-sm leading-7 text-slate-400">
               {score >= 80 &&
-                "The market environment is showing broad strength across trend, momentum, sector participation, and volatility. This may support a more aggressive approach, while position sizing and risk controls should still remain disciplined."}
+                "Today&apos;s Market Score suggests broad strength across trend, momentum, sector participation, and volatility. Conditions may support a more aggressive approach while still maintaining disciplined position sizing and risk management."}
 
               {score >= 65 &&
                 score < 80 &&
-                "The market environment is constructive. Trend and participation are generally supportive, although traders should continue monitoring weaker areas and avoid chasing extended moves."}
+                "Today&apos;s Market Score suggests a constructive environment. Trend and participation remain supportive, although traders should continue monitoring weaker areas and avoid chasing extended moves."}
 
               {score >= 50 &&
                 score < 65 &&
-                "The market environment is mixed. Some indicators are supportive while others are less convincing. Selective setups and controlled position sizing may be more appropriate."}
+                "Today&apos;s Market Score suggests mixed conditions. Some indicators remain supportive while others are less convincing. Selective setups and disciplined position sizing may be more appropriate."}
 
               {score >= 30 &&
                 score < 50 &&
-                "The market environment is cautious. Participation or momentum may be weakening, which can justify reduced exposure and tighter risk controls."}
+                "Today&apos;s Market Score suggests caution. Participation or momentum may be weakening, making reduced exposure and tighter risk controls appropriate."}
 
               {score < 30 &&
-                "The market environment is defensive. Weak trend, poor participation, or elevated volatility may favor capital preservation and limited exposure."}
+                "Today&apos;s Market Score suggests a defensive environment. Weak trend, poor participation, or elevated volatility may favor preserving capital until conditions improve."}
             </p>
           </article>
 

@@ -212,58 +212,25 @@ function getTheme(score: number) {
 }
 
 function getHeadline(data: MarketBreadthResponse) {
-  const trend = data.advanceDeclineLine.trend;
-
   switch (data.label) {
     case "Strong Participation":
-      return trend === "Rising"
-        ? "Broad market participation is supporting the rally."
-        : "Broad market participation remains strong.";
+      return "Today’s market participation is strong.";
 
     case "Healthy Participation":
-      return trend === "Rising"
-        ? "Healthy participation is supporting the market."
-        : "Market participation remains healthy.";
+      return "Today’s market participation is healthy.";
 
     case "Mixed Participation":
-      return trend === "Rising"
-        ? "Market participation is improving but remains mixed."
-        : trend === "Falling"
-          ? "Market participation is weakening and remains mixed."
-          : "Market participation remains mixed.";
+      return "Today’s market participation is mixed.";
 
     case "Weak Participation":
-      return trend === "Rising"
-        ? "Participation is improving but remains weak."
-        : "Market participation continues to weaken.";
+      return "Today’s market participation is weak.";
+
+    case "Very Weak Participation":
+      return "Today’s market participation is very weak.";
 
     default:
-      return "Broad market participation remains under pressure.";
+      return "Today’s market participation is under pressure.";
   }
-}
-
-function getParticipationLabel(score: number) {
-  if (score >= 80) {
-    return "Strong Participation";
-  }
-
-  if (score >= 65) {
-    return "Healthy Participation";
-  }
-
-  if (score >= 55) {
-    return "Improving Participation";
-  }
-
-  if (score >= 45) {
-    return "Mixed Participation";
-  }
-
-  if (score >= 30) {
-    return "Weak Participation";
-  }
-
-  return "Broad Selling Pressure";
 }
 
 function getInterpretation(data: MarketBreadthResponse) {
@@ -830,7 +797,8 @@ export default function MarketBreadthPage() {
                 the major indexes. It tracks participation, trend strength,
                 sector breadth, equal-weight performance, and the
                 advance-decline trend to show whether market moves are
-                broadly supported or narrowly driven.
+                broadly supported or narrowly driven. The metrics below
+                reflect today’s market participation.
               </p>
 
               <div className="mt-5 flex flex-wrap gap-2">
