@@ -751,19 +751,18 @@ async function fetchStockBreadth(
  * Process symbols in small groups rather than sending more than
  * 120 Yahoo requests simultaneously.
  */
-async function fetchBreadthForSymbols(
-  symbols: string[],
-  batchSize = 6,
+async function fetchBreadthInBatches(
+  batchSize = 8,
 ): Promise<BreadthFetchResult> {
   const stocks: BreadthStock[] = [];
   const failedSymbols: string[] = [];
 
   for (
     let startIndex = 0;
-    startIndex < symbols.length;
+    startIndex < breadthSymbols.length;
     startIndex += batchSize
   ) {
-    const batch = symbols.slice(
+    const batch = breadthSymbols.slice(
       startIndex,
       startIndex + batchSize,
     );
@@ -792,9 +791,13 @@ async function fetchBreadthForSymbols(
       );
     });
 
+    /*
+     * A short pause between batches reduces the chance of Yahoo
+     * throttling the route.
+     */
     if (
       startIndex + batchSize <
-      symbols.length
+      breadthSymbols.length
     ) {
       await wait(100);
     }
@@ -803,116 +806,6 @@ async function fetchBreadthForSymbols(
   return {
     stocks,
     failedSymbols,
-  };
-}
-
-/*
- * Cloudflare Workers Free allows only 50 external subrequests in
- * one invocation. The parent request therefore delegates groups
- * of 18 symbols to separate Worker invocations. Each child request
- * uses no more than 36 Yahoo requests, even when every symbol needs
- * the query2 fallback.
- */
-async function fetchBreadthThroughWorkerBatches(
-  request: Request,
-  workerBatchSize = 18,
-): Promise<BreadthFetchResult> {
-  const workerBatches: string[][] = [];
-
-  for (
-    let startIndex = 0;
-    startIndex < breadthSymbols.length;
-    startIndex += workerBatchSize
-  ) {
-    workerBatches.push(
-      breadthSymbols.slice(
-        startIndex,
-        startIndex + workerBatchSize,
-      ),
-    );
-  }
-
-  const stocks: BreadthStock[] = [];
-  const failedSymbols: string[] = [];
-
-  /*
-   * Process up to four child Worker calls at once. This stays below
-   * Cloudflare's six simultaneous open-connection limit while still
-   * keeping the route reasonably fast.
-   */
-  const childRequestGroupSize = 4;
-
-  for (
-    let groupStart = 0;
-    groupStart < workerBatches.length;
-    groupStart += childRequestGroupSize
-  ) {
-    const group = workerBatches.slice(
-      groupStart,
-      groupStart + childRequestGroupSize,
-    );
-
-    const groupResults = await Promise.allSettled(
-      group.map(async (symbols) => {
-        const batchUrl = new URL(request.url);
-
-        batchUrl.search = "";
-        batchUrl.searchParams.set(
-          "mode",
-          "breadth-batch",
-        );
-        batchUrl.searchParams.set(
-          "symbols",
-          symbols.join(","),
-        );
-
-        const response = await fetchWithTimeout(
-          batchUrl.toString(),
-          {
-            cache: "no-store",
-            headers: {
-              Accept: "application/json",
-              "x-maicatrades-internal-batch": "1",
-            },
-          },
-          45_000,
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            `Child breadth request returned HTTP ${response.status}`,
-          );
-        }
-
-        return (await response.json()) as BreadthFetchResult;
-      }),
-    );
-
-    groupResults.forEach((result, index) => {
-      const symbols = group[index];
-
-      if (result.status === "fulfilled") {
-        stocks.push(...result.value.stocks);
-        failedSymbols.push(
-          ...result.value.failedSymbols,
-        );
-        return;
-      }
-
-      failedSymbols.push(...symbols);
-
-      console.error(
-        "Child market breadth request failed:",
-        result.reason instanceof Error
-          ? result.reason.message
-          : result.reason,
-      );
-    });
-  }
-
-  return {
-    stocks,
-    failedSymbols: [...new Set(failedSymbols)],
   };
 }
 
@@ -1181,86 +1074,13 @@ function calculateBreadthScore({
   );
 }
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
-    const requestUrl = new URL(request.url);
-    const mode = requestUrl.searchParams.get("mode");
-
-    if (mode === "breadth-batch") {
-      const isInternalBatch =
-        request.headers.get(
-          "x-maicatrades-internal-batch",
-        ) === "1";
-
-      if (!isInternalBatch) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Unauthorized batch request.",
-          },
-          {
-            status: 401,
-            headers: {
-              "Cache-Control":
-                "no-store, max-age=0",
-            },
-          },
-        );
-      }
-
-      const requestedSymbols = (
-        requestUrl.searchParams.get("symbols") ??
-        ""
-      )
-        .split(",")
-        .map((symbol) =>
-          symbol.trim().toUpperCase(),
-        )
-        .filter((symbol) =>
-  (breadthSymbols as readonly string[]).includes(
-    symbol,
-  ),
-);
-
-      const uniqueSymbols = [
-        ...new Set(requestedSymbols),
-      ].slice(0, 18);
-
-      if (uniqueSymbols.length === 0) {
-        return NextResponse.json(
-          {
-            stocks: [],
-            failedSymbols: [],
-          } satisfies BreadthFetchResult,
-          {
-            headers: {
-              "Cache-Control":
-                "no-store, max-age=0",
-            },
-          },
-        );
-      }
-
-      const batchResult =
-        await fetchBreadthForSymbols(
-          uniqueSymbols,
-        );
-
-      return NextResponse.json(batchResult, {
-        headers: {
-          "Cache-Control":
-            "no-store, max-age=0",
-        },
-      });
-    }
-
     const [
       breadthResult,
       relativePerformance,
     ] = await Promise.all([
-      fetchBreadthThroughWorkerBatches(
-        request,
-      ),
+      fetchBreadthInBatches(),
       getRelativePerformance(),
     ]);
 

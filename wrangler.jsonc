@@ -14,6 +14,22 @@
     {
       "binding": "WORKER_SELF_REFERENCE",
       "service": "maicatrades"
+    },
+    {
+      "binding": "BREADTH_WORKER_1",
+      "service": "maicatrades-breadth-1"
+    },
+    {
+      "binding": "BREADTH_WORKER_2",
+      "service": "maicatrades-breadth-2"
+    },
+    {
+      "binding": "BREADTH_WORKER_3",
+      "service": "maicatrades-breadth-3"
+    },
+    {
+      "binding": "BREADTH_WORKER_4",
+      "service": "maicatrades-breadth-4"
     }
   ],
   "images": {
