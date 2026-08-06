@@ -60,9 +60,7 @@ export default function DashboardExtras({
           </p>
 
           
-  <p className="text-xs font-semibold uppercase text-slate-300">
-    Quote of the Day
-  </p>
+  
 
   <p className="mt-1 text-sm text-slate-200">
     “Discipline is choosing between what you want now and what
