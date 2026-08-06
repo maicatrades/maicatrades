@@ -212,27 +212,34 @@ function getTheme(score: number) {
 }
 
 function getHeadline(data: MarketBreadthResponse) {
-  if (data.breadthScore >= 80) {
-    return "Strong participation is supporting the market";
-  }
+  const trend = data.advanceDeclineLine.trend;
 
-  if (data.breadthScore >= 65) {
-    return "Healthy participation is supporting the market";
-  }
+  switch (data.label) {
+    case "Strong Participation":
+      return trend === "Rising"
+        ? "Broad market participation is supporting the rally."
+        : "Broad market participation remains strong.";
 
-  if (data.breadthScore >= 55) {
-    return "Participation is improving across the market";
-  }
+    case "Healthy Participation":
+      return trend === "Rising"
+        ? "Healthy participation is supporting the market."
+        : "Market participation remains healthy.";
 
-  if (data.breadthScore >= 45) {
-    return "Market participation remains mixed";
-  }
+    case "Mixed Participation":
+      return trend === "Rising"
+        ? "Market participation is improving but remains mixed."
+        : trend === "Falling"
+          ? "Market participation is weakening and remains mixed."
+          : "Market participation remains mixed.";
 
-  if (data.breadthScore >= 30) {
-    return "Participation is weakening beneath the indexes";
-  }
+    case "Weak Participation":
+      return trend === "Rising"
+        ? "Participation is improving but remains weak."
+        : "Market participation continues to weaken.";
 
-  return "Broad market participation is under pressure";
+    default:
+      return "Broad market participation remains under pressure.";
+  }
 }
 
 function getParticipationLabel(score: number) {
@@ -301,7 +308,13 @@ function Card({
   );
 }
 
-function ScoreGauge({ score }: { score: number }) {
+function ScoreGauge({
+  score,
+  label,
+}: {
+  score: number;
+  label: string;
+}) {
   const normalizedScore = clamp(score);
   const theme = getTheme(normalizedScore);
 
@@ -333,7 +346,7 @@ function ScoreGauge({ score }: { score: number }) {
           <span
             className={`mt-3 max-w-[125px] text-center text-xs font-semibold leading-4 ${theme.text}`}
           >
-            {getParticipationLabel(normalizedScore)}
+            {label}
           </span>
         </div>
       </div>
@@ -824,7 +837,7 @@ export default function MarketBreadthPage() {
                 <span
                   className={`rounded-full border px-3 py-1 text-xs font-semibold ${theme.border} ${theme.background} ${theme.text}`}
                 >
-                 {getParticipationLabel(data.breadthScore)}
+                 {data.label}
                 </span>
 
                 <span className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs font-semibold text-slate-300">
@@ -840,7 +853,10 @@ export default function MarketBreadthPage() {
               </div>
             </div>
 
-            <ScoreGauge score={data.breadthScore} />
+            <ScoreGauge
+  score={data.breadthScore}
+  label={data.label}
+/>
           </div>
         </section>
 
@@ -962,13 +978,13 @@ export default function MarketBreadthPage() {
 
           <Card className="p-6">
             <h2 className="text-lg font-semibold">
-              Equal-weight confirmation
-            </h2>
+  Market Leadership
+</h2>
 
-            <p className="mt-1 text-sm text-slate-500">
-              Comparing RSP with SPY helps show whether performance is
-              broad or concentrated.
-            </p>
+<p className="mt-1 text-sm text-slate-500">
+  Comparing SPY with RSP shows whether the market is being led
+  broadly or primarily by the largest companies.
+</p>
 
             {data.relativePerformance ? (
               <>
@@ -1014,7 +1030,7 @@ export default function MarketBreadthPage() {
 
                 <div className="mt-4 rounded-xl border border-blue-500/20 bg-blue-500/10 p-4">
                   <p className="text-xs uppercase tracking-wide text-blue-300">
-                    Current signal
+                    Current Market Structure
                   </p>
 
                   <p className="mt-2 font-semibold text-white">
