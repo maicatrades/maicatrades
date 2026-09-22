@@ -22,6 +22,16 @@ type MarketScoreResponse = {
   score: number;
   rawScore: number;
   breadthAdjustedScore?: number;
+  breadthConfirmation?: {
+    available: boolean;
+    adjustment: number;
+    scoreCap: number;
+    reason: string;
+    snapshot: {
+      score: number;
+      updatedAt: string | null;
+    } | null;
+  };
   label: string;
   environment: {
     bias: string;
@@ -216,6 +226,12 @@ export default function MarketScorePage() {
   const updatedAt = marketScore?.updatedAt
     ? new Date(marketScore.updatedAt).toLocaleString()
     : "Waiting for live data";
+  const breadth = marketScore?.breadthConfirmation;
+  const cappedByBreadth =
+    marketScore !== null &&
+    !marketScore.isFallback &&
+    breadth?.available === true &&
+    marketScore.rawScore + breadth.adjustment > breadth.scoreCap;
 
   return (
     <main className="min-h-screen bg-[#050b12] text-slate-100">
@@ -340,6 +356,41 @@ export default function MarketScorePage() {
                   }}
                 />
               </div>
+
+              {marketScore && (
+                <div className="mt-5 rounded-xl border border-slate-700 bg-[#050b12] p-4 text-left text-sm">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-400">Raw score</span>
+                    <span className="font-semibold text-slate-100">
+                      {marketScore.rawScore}/100
+                    </span>
+                  </div>
+                  {breadth?.available && (
+                    <div className="mt-2 flex justify-between gap-3">
+                      <span className="text-slate-400">
+                        Breadth {breadth.snapshot?.score ?? "—"} · adjustment
+                      </span>
+                      <span className="font-semibold text-slate-100">
+                        {breadth.adjustment > 0 ? "+" : ""}
+                        {breadth.adjustment}
+                      </span>
+                    </div>
+                  )}
+                  {cappedByBreadth && (
+                    <p className="mt-3 text-amber-300">
+                      Final score capped at {breadth?.scoreCap} by weak market
+                      participation. The raw score can move while the final
+                      score stays at this ceiling.
+                    </p>
+                  )}
+                  {!marketScore.isFallback && breadth && !breadth.available && (
+                    <p className="mt-3 text-amber-300">
+                      Breadth confirmation unavailable: {breadth.reason}
+                      {" "}The score is based on the four core components.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <p className="mt-4 text-xs text-slate-500">
                 Today&apos;s reading updated: {updatedAt}
