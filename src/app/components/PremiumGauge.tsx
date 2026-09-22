@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 
 type PremiumMarketScoreGaugeProps = {
-  score: number;
+  score: number | null;
   label: string;
   loading: boolean;
+  contextLabel?: string;
 };
 
 function getGaugeTheme(score: number) {
@@ -52,8 +53,13 @@ export default function PremiumMarketScoreGauge({
   score,
   label,
   loading,
+  contextLabel = "Live market conditions",
 }: PremiumMarketScoreGaugeProps) {
-  const safeScore = Math.min(100, Math.max(0, Math.round(score)));
+  const unavailable = !loading && score === null;
+  const safeScore = Math.min(
+    100,
+    Math.max(0, Math.round(score ?? 0)),
+  );
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
@@ -93,7 +99,13 @@ export default function PremiumMarketScoreGauge({
     };
   }, [safeScore, loading]);
 
-  const theme = getGaugeTheme(animatedScore);
+  const theme = unavailable
+    ? {
+        primary: "#64748b",
+        secondary: "#94a3b8",
+        glow: "rgba(100, 116, 139, 0.18)",
+      }
+    : getGaugeTheme(animatedScore);
   const radius = 92;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference * (1 - animatedScore / 100);
@@ -110,7 +122,11 @@ export default function PremiumMarketScoreGauge({
         viewBox="0 0 240 240"
         className="absolute inset-0 h-full w-full"
         role="img"
-        aria-label={`Market Score ${animatedScore} out of 100`}
+        aria-label={
+          unavailable
+            ? "Market Score temporarily unavailable"
+            : `Market Score ${animatedScore} out of 100`
+        }
       >
         <defs>
           <linearGradient
@@ -208,14 +224,14 @@ export default function PremiumMarketScoreGauge({
       <div className="relative z-10 text-center">
         <div className="flex items-end justify-center">
           <span className="text-7xl font-black tracking-[-0.06em] text-white tabular-nums">
-            {loading ? "--" : animatedScore}
+            {loading || unavailable ? "—" : animatedScore}
           </span>
 
           <span
             className="mb-2 ml-1 text-lg font-bold transition-colors duration-300"
             style={{ color: theme.primary }}
           >
-            /100
+            {unavailable ? "" : "/100"}
           </span>
         </div>
 
@@ -223,13 +239,19 @@ export default function PremiumMarketScoreGauge({
           className="mt-1 text-lg font-bold transition-colors duration-300"
           style={{ color: theme.primary }}
         >
-          {loading ? "Loading" : label}
+          {loading
+            ? "Loading"
+            : unavailable
+              ? "Temporarily unavailable"
+              : label}
         </p>
 
         <p className="mt-1 text-[11px] uppercase tracking-[0.12em] text-slate-500">
           {loading
             ? "Loading live data"
-            : "Live market conditions"}
+            : unavailable
+              ? "Waiting for verified live data"
+              : contextLabel}
         </p>
       </div>
     </div>

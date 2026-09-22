@@ -7,7 +7,25 @@ import {
   ShieldAlert,
   TrendingUp,
 } from "lucide-react";
+import type { Metadata } from "next";
+export const metadata: Metadata = {
+  title: "Financial Disclaimer | MaicaTrades",
 
+  description:
+    "Read the MaicaTrades Financial Disclaimer covering educational content, trading risk, market data, trade ideas, hypothetical results, and user responsibility.",
+
+  alternates: {
+    canonical: "/disclaimer",
+  },
+
+  openGraph: {
+    title: "Financial Disclaimer | MaicaTrades",
+    description:
+      "Important information about educational content, trading risk, market data, hypothetical results, and financial responsibility when using MaicaTrades.",
+    url: "/disclaimer",
+    type: "website",
+  },
+};
 export default function DisclaimerPage() {
   return (
     <main className="min-h-screen bg-[#050b12] text-white">

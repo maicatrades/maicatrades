@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { Activity, Gauge } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import MarketOutlook from "./MarketOutlook";
 import PremiumMarketScoreGauge from "./PremiumGauge";
 
@@ -24,21 +27,172 @@ type MarketScoreResponse = {
     sectorStrength: MarketScoreComponent;
     volatility: MarketScoreComponent;
   };
+  fiveDayAverage: number | null;
+  fiveDayAverageSampleSize: number;
+  fiveDayAverageDates: string[];
   updatedAt: string;
+  isFallback?: boolean;
+  fallbackMessage?: string;
   error?: string;
+};
+
+type MarketPulseSummary = {
+  bullish: number;
+  neutral: number;
+  watch: number;
+  lowRisk: number;
+  riskSignals: number;
+  positiveBenchmarks: number;
+  negativeBenchmarks: number;
+  totalMarketBenchmarks: number;
+  averageMarketChange: number;
+  marketTone: string;
 };
 
 type MarketHeroProps = {
   marketScore: MarketScoreResponse | null;
   loading: boolean;
+  marketPulseSummary: MarketPulseSummary | null;
+  marketPulseLoading: boolean;
 };
+
+type TickerItem = {
+  symbol: string;
+  changePercent: number;
+  session: "PRE" | "REGULAR" | "AH";
+};
+
+type TickerResponse = {
+  success: boolean;
+  data?: TickerItem[];
+};
+
+function isAfterPremarketCheckpoint() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const weekday = parts.find((part) => part.type === "weekday")?.value;
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  const minutes = hour * 60 + minute;
+
+  return (
+    weekday !== "Sat" &&
+    weekday !== "Sun" &&
+    minutes >= 510 &&
+    minutes < 570
+  );
+}
 
 export default function MarketHero({
   marketScore,
   loading,
+  marketPulseSummary,
+  marketPulseLoading,
 }: MarketHeroProps) {
-  const score = marketScore?.score ?? 0;
-  const scoreLabel = marketScore?.label ?? "Loading";
+  const score = marketScore?.score ?? null;
+  const scoreLabel = marketScore?.label ?? "Unavailable";
+  const fiveDayAverage = marketScore?.fiveDayAverage ?? null;
+  const fiveDayDifference =
+    fiveDayAverage === null || score === null
+      ? null
+      : score - fiveDayAverage;
+  const fiveDayDirection =
+    fiveDayDifference === null
+      ? null
+      : fiveDayDifference > 2
+        ? "Improving"
+        : fiveDayDifference < -2
+          ? "Weakening"
+          : "Flat";
+  const fiveDayDirectionClass =
+    fiveDayDirection === "Improving"
+      ? "text-emerald-400"
+      : fiveDayDirection === "Weakening"
+        ? "text-red-400"
+        : "text-yellow-400";
+  const [tickerItems, setTickerItems] = useState<TickerItem[]>([]);
+  const [premarketWindowOpen, setPremarketWindowOpen] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTickerContext() {
+      try {
+        const response = await fetch("/api/market-ticker", {
+          cache: "no-store",
+        });
+        const result = (await response.json()) as TickerResponse;
+
+        if (mounted && response.ok && result.success) {
+          setTickerItems(result.data ?? []);
+        }
+      } catch (error) {
+        console.error("Market outlook ticker context error:", error);
+      }
+
+      if (mounted) {
+        setPremarketWindowOpen(isAfterPremarketCheckpoint());
+      }
+    }
+
+    void loadTickerContext();
+
+    const interval = window.setInterval(
+      loadTickerContext,
+      5 * 60_000,
+    );
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const premarketItems = useMemo(
+    () =>
+      tickerItems.filter(
+        (item) =>
+          item.session === "PRE" &&
+          ["SPY", "QQQ", "IWM"].includes(item.symbol),
+      ),
+    [tickerItems],
+  );
+
+  const isPremarket = premarketItems.length >= 3;
+
+  const premarketTone = useMemo<
+    "Risk-On" | "Risk-Off" | "Mixed" | null
+  >(() => {
+    if (!isPremarket) return null;
+
+    const positive = premarketItems.filter(
+      (item) => item.changePercent > 0,
+    ).length;
+    const negative = premarketItems.filter(
+      (item) => item.changePercent < 0,
+    ).length;
+    const averageChange =
+      premarketItems.reduce(
+        (sum, item) => sum + item.changePercent,
+        0,
+      ) / premarketItems.length;
+
+    if (positive >= 3 && averageChange >= 0.15) {
+      return "Risk-On";
+    }
+
+    if (negative >= 3 && averageChange <= -0.15) {
+      return "Risk-Off";
+    }
+
+    return "Mixed";
+  }, [isPremarket, premarketItems]);
 
   return (
     <Link
@@ -58,22 +212,66 @@ export default function MarketHero({
           <div className="flex flex-col items-center justify-center">
             <div className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-blue-400">
               <Gauge size={18} />
-              Today&apos;s Market Score
+              {isPremarket
+                ? "Latest Market Score"
+                : "Today’s Market Score"}
             </div>
 
             <PremiumMarketScoreGauge
               score={score}
               label={scoreLabel}
               loading={loading}
+              contextLabel={
+                marketScore?.isFallback
+                  ? "Latest verified stored snapshot"
+                  : isPremarket
+                  ? "Previous regular-session close"
+                  : "Live market conditions"
+              }
             />
 
-            <div className="mt-5 flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">
+            <div className="mt-5 flex items-center gap-3 rounded-xl border border-slate-700/80 bg-slate-950/50 px-4 py-2.5">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  5-Day Average
+                </p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {fiveDayDirection ? (
+                    <span className={`font-semibold ${fiveDayDirectionClass}`}>
+                      {fiveDayDirection}
+                    </span>
+                  ) : (
+                    "Building history"
+                  )}
+                </p>
+              </div>
+
+              <div className="h-9 w-px bg-slate-700" />
+
+              <p className="min-w-10 text-center text-2xl font-bold text-white">
+                {loading
+                  ? "—"
+                  : fiveDayAverage?.toFixed(1) ?? "—"}
+              </p>
+            </div>
+
+            <div className="mt-4 flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">
               <Activity size={16} />
-              Refreshes automatically every 5 minutes
+              {isPremarket
+                ? "Score frozen until regular session"
+                : "Refreshes automatically every 5 minutes"}
             </div>
           </div>
 
-          <MarketOutlook marketScore={marketScore} loading={loading} />
+          <MarketOutlook
+            marketScore={marketScore}
+            loading={loading}
+            marketPulseSummary={marketPulseSummary}
+            marketPulseLoading={marketPulseLoading}
+            isPremarket={isPremarket}
+            premarketTone={premarketTone}
+            premarketWindowOpen={premarketWindowOpen}
+          />
         </div>
       </section>
     </Link>

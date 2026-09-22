@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 const REQUEST_TIMEOUT_MS = 10_000;
 const MINIMUM_REQUIRED_SECTORS = 8;
 const DATA_CACHE_SECONDS = 300;
+const MAX_CONCURRENT_MARKET_REQUESTS = 3;
 
 const SYMBOLS = {
   spy: "SPY",
@@ -42,6 +43,7 @@ type YahooMeta = {
 
 type YahooResult = {
   meta?: YahooMeta;
+  timestamp?: number[];
   indicators?: {
     quote?: YahooQuote[];
   };
@@ -62,19 +64,17 @@ type MarketData = {
   price: number;
   closes: number[];
   series: number[];
+  tradingDate: string;
   currency: string;
   marketState: string;
+  sourceTradingDate: string;
+  sessionPriceUsed: boolean;
 };
 
 type SectorResult = {
   symbol: string;
   dailyReturn: number;
   fiveDayReturn: number;
-};
-
-type FetchResult = {
-  successful: MarketData[];
-  failedSymbols: string[];
 };
 
 type FetchOptions = Parameters<typeof fetch>[1];
@@ -147,27 +147,136 @@ function getErrorMessage(error: unknown) {
   return String(error);
 }
 
+type DatedClose = {
+  close: number;
+  tradingDate: string;
+};
+
+type RawMarketData = {
+  symbol: string;
+  regularMarketPrice: number;
+  points: DatedClose[];
+  currency: string;
+  marketState: string;
+};
+
+function getEasternSession(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
+
+  const tradingDate =
+    `${values.year}-${values.month}-${values.day}`;
+  const minutes = Number(values.hour) * 60 + Number(values.minute);
+  const weekday = values.weekday;
+  const isWeekday = weekday !== "Sat" && weekday !== "Sun";
+
+  return {
+    tradingDate,
+    minutes,
+    isWeekday,
+    isRegularSession:
+      isWeekday && minutes >= 9 * 60 + 30 && minutes < 16 * 60,
+  };
+}
+
+function getEasternTradingDate(timestampSeconds: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestampSeconds * 1000));
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 /**
- * Yahoo's daily-close array may already include the current market price
- * after the closing bell.
+ * Align one Yahoo series to SPY's official scoring date.
  *
- * During an active session, regularMarketPrice can be newer than the last
- * daily candle. In that case, append the live price so the calculations use
- * the current session.
+ * Outside the U.S. regular session, every calculation uses the aligned daily
+ * close. During the regular session, the live price may replace (never append
+ * to) today's active daily candle. This prevents a live quote from becoming a
+ * fake extra trading day and prevents VIX/premarket data from advancing ahead
+ * of SPY.
  */
-function buildCurrentSeries(closes: number[], marketPrice: number) {
-  if (closes.length === 0) {
-    return [marketPrice];
+function alignMarketData(
+  data: RawMarketData,
+  scoringDate: string,
+  useLiveSessionPrice: boolean,
+): MarketData {
+  const alignedPoints = data.points.filter(
+    (point) => point.tradingDate <= scoringDate,
+  );
+
+  const minimumAlignedPoints =
+    data.symbol === SYMBOLS.vix ? 6 : 55;
+
+  if (alignedPoints.length < minimumAlignedPoints) {
+    throw new Error(
+      `Not enough aligned historical data for ${data.symbol} on ${scoringDate}.`,
+    );
   }
 
-  const latestClose = closes[closes.length - 1];
-  const difference = Math.abs(latestClose - marketPrice);
+  const latestPoint = alignedPoints[alignedPoints.length - 1];
+  const hasScoringDateCandle =
+    latestPoint.tradingDate === scoringDate;
 
-  if (difference < 0.01) {
-    return closes;
+  if (!hasScoringDateCandle && !useLiveSessionPrice) {
+    throw new Error(
+      `${data.symbol} is not aligned to the Market Score date. ` +
+        `Expected ${scoringDate}, received ${latestPoint.tradingDate}.`,
+    );
   }
 
-  return [...closes, marketPrice];
+  const closes = alignedPoints.map((point) => point.close);
+  const canUseLivePrice =
+    useLiveSessionPrice &&
+    isValidNumber(data.regularMarketPrice) &&
+    data.regularMarketPrice > 0;
+  const price = canUseLivePrice
+    ? data.regularMarketPrice
+    : closes[closes.length - 1];
+  const series = [...closes];
+
+  if (canUseLivePrice) {
+    if (hasScoringDateCandle) {
+      series[series.length - 1] = price;
+    } else {
+      // Yahoo may not expose today's 1d candle early in the session. In that
+      // case, today's verified regular-session price is one legitimate new
+      // trading day and must be appended exactly once.
+      series.push(price);
+    }
+  }
+
+  return {
+    symbol: data.symbol,
+    price,
+    closes,
+    series,
+    tradingDate: scoringDate,
+    sourceTradingDate:
+      data.points[data.points.length - 1]?.tradingDate ?? scoringDate,
+    currency: data.currency,
+    marketState: data.marketState,
+    sessionPriceUsed: canUseLivePrice,
+  };
 }
 
 async function fetchWithTimeout(
@@ -194,13 +303,15 @@ async function fetchWithTimeout(
 async function requestYahooData(
   host: YahooHost,
   symbol: string,
-): Promise<MarketData> {
+  range = "6mo",
+  minimumPoints = 55,
+): Promise<RawMarketData> {
   const encodedSymbol = encodeURIComponent(symbol);
 
   const url =
     `https://${host}.finance.yahoo.com/v8/finance/chart/` +
     `${encodedSymbol}` +
-    "?interval=1d&range=6mo&includePrePost=false";
+    `?interval=1d&range=${range}&includePrePost=false`;
 
   const response = await fetchWithTimeout(
     url,
@@ -250,18 +361,39 @@ async function requestYahooData(
     );
   }
 
-  const closes =
-    result.indicators?.quote?.[0]?.close?.filter(isValidNumber) ??
-    [];
+  const rawCloses =
+    result.indicators?.quote?.[0]?.close ?? [];
 
-  if (closes.length < 55) {
+  const timestamps = result.timestamp ?? [];
+
+  const validPoints = rawCloses
+    .map((close, index) => {
+      const timestamp = timestamps[index];
+
+      if (!isValidNumber(close) || !isValidNumber(timestamp)) {
+        return null;
+      }
+
+      return {
+        close,
+        timestamp,
+      };
+    })
+    .filter(
+      (point): point is { close: number; timestamp: number } =>
+        point !== null,
+    );
+
+  if (validPoints.length < minimumPoints) {
     throw new Error(
       `Not enough historical data returned for ${symbol}. ` +
-        `Received ${closes.length} closes.`,
+        `Received ${validPoints.length} closes.`,
     );
   }
 
-  const latestClose = closes[closes.length - 1];
+  const latestPoint = validPoints[validPoints.length - 1];
+  const latestClose = latestPoint.close;
+
   const regularMarketPrice = result.meta?.regularMarketPrice;
 
   const price = isValidNumber(regularMarketPrice)
@@ -272,19 +404,19 @@ async function requestYahooData(
     throw new Error(`Yahoo returned an invalid price for ${symbol}.`);
   }
 
-  const series = buildCurrentSeries(closes, price);
-
   return {
     symbol,
-    price,
-    closes,
-    series,
+    regularMarketPrice: price,
+    points: validPoints.map((point) => ({
+      close: point.close,
+      tradingDate: getEasternTradingDate(point.timestamp),
+    })),
     currency: result.meta?.currency ?? "USD",
     marketState: result.meta?.marketState ?? "UNKNOWN",
   };
 }
 
-async function fetchYahooData(symbol: string): Promise<MarketData> {
+async function fetchYahooData(symbol: string): Promise<RawMarketData> {
   try {
     return await requestYahooData("query1", symbol);
   } catch (query1Error) {
@@ -296,6 +428,28 @@ async function fetchYahooData(symbol: string): Promise<MarketData> {
     try {
       return await requestYahooData("query2", symbol);
     } catch (query2Error) {
+      if (symbol === SYMBOLS.vix) {
+        console.warn(
+          "Six-month VIX history is unavailable. Trying the 10-day VIX fallback.",
+        );
+
+        try {
+          return await requestYahooData("query1", symbol, "10d", 6);
+        } catch (shortQuery1Error) {
+          try {
+            return await requestYahooData("query2", symbol, "10d", 6);
+          } catch (shortQuery2Error) {
+            throw new Error(
+              `Unable to load ${symbol}. ` +
+                `Six-month query1: ${getErrorMessage(query1Error)} ` +
+                `Six-month query2: ${getErrorMessage(query2Error)} ` +
+                `Ten-day query1: ${getErrorMessage(shortQuery1Error)} ` +
+                `Ten-day query2: ${getErrorMessage(shortQuery2Error)}`,
+            );
+          }
+        }
+      }
+
       const query1Message = getErrorMessage(query1Error);
       const query2Message = getErrorMessage(query2Error);
 
@@ -310,29 +464,38 @@ async function fetchYahooData(symbol: string): Promise<MarketData> {
 
 async function fetchAllMarketData(
   symbols: string[],
-): Promise<FetchResult> {
-  const results = await Promise.allSettled(
-    symbols.map((symbol) => fetchYahooData(symbol)),
+) {
+  const successful: RawMarketData[] = [];
+  const failedSymbols: string[] = [];
+  let nextSymbolIndex = 0;
+
+  async function worker() {
+    while (nextSymbolIndex < symbols.length) {
+      const symbolIndex = nextSymbolIndex;
+      nextSymbolIndex += 1;
+      const symbol = symbols[symbolIndex];
+
+      try {
+        successful.push(await fetchYahooData(symbol));
+      } catch (error) {
+        failedSymbols.push(symbol);
+
+        console.error(
+          `Market Score request failed for ${symbol}:`,
+          error,
+        );
+      }
+    }
+  }
+
+  const workerCount = Math.min(
+    MAX_CONCURRENT_MARKET_REQUESTS,
+    symbols.length,
   );
 
-  const successful: MarketData[] = [];
-  const failedSymbols: string[] = [];
-
-  results.forEach((result, index) => {
-    const symbol = symbols[index];
-
-    if (result.status === "fulfilled") {
-      successful.push(result.value);
-      return;
-    }
-
-    failedSymbols.push(symbol);
-
-    console.error(
-      `Market Score request failed for ${symbol}:`,
-      result.reason,
-    );
-  });
+  await Promise.all(
+    Array.from({ length: workerCount }, () => worker()),
+  );
 
   return {
     successful,
@@ -765,15 +928,16 @@ function getBreadthAdjustment(breadthScore: number) {
   };
 }
 
-async function getLatestBreadthConfirmation(): Promise<BreadthConfirmation> {
+async function getBreadthConfirmationForDate(
+  currentTradingDate: string,
+): Promise<BreadthConfirmation> {
   try {
     const { data, error } = await supabaseAdmin
       .from("market_breadth_history")
       .select(
         "trading_date, breadth_score, breadth_label, advancing_percent, positive_sector_percent, updated_at",
       )
-      .order("trading_date", { ascending: false })
-      .limit(1)
+      .eq("trading_date", currentTradingDate)
       .maybeSingle();
 
     if (error) {
@@ -913,6 +1077,104 @@ function getEnvironment(score: number) {
   };
 }
 
+async function getStoredMarketScoreFallback() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("market_score_history")
+      .select(
+        "trading_date, market_score, market_label, raw_score, market_bias, risk_level, approach, trend_score, trend_max_score, momentum_score, momentum_max_score, sector_strength_score, sector_strength_max_score, volatility_score, volatility_max_score, captured_at, updated_at",
+      )
+      .order("trading_date", { ascending: false })
+      .limit(5);
+
+    if (error || !data || data.length === 0) {
+      if (error) {
+        console.error("Unable to retrieve stored Market Score fallback:", error);
+      }
+
+      return null;
+    }
+
+    const current = data[0];
+    const score = Number(current.market_score);
+
+    if (!Number.isFinite(score)) {
+      return null;
+    }
+
+    const previous = data[1] ?? null;
+    const previousScore = previous
+      ? Number(previous.market_score)
+      : null;
+    const validPreviousScore =
+      previousScore !== null && Number.isFinite(previousScore)
+        ? previousScore
+        : null;
+    const scoreChange =
+      validPreviousScore === null ? null : score - validPreviousScore;
+    const storedScores = data
+      .map((row) => Number(row.market_score))
+      .filter(Number.isFinite);
+    const fiveDayAverage =
+      storedScores.length === 5
+        ? round(average(storedScores), 1)
+        : null;
+
+    return {
+      score,
+      rawScore: Number.isFinite(Number(current.raw_score))
+        ? Number(current.raw_score)
+        : score,
+      label: current.market_label ?? getMarketLabel(score),
+      environment: {
+        bias: current.market_bias ?? getEnvironment(score).bias,
+        riskLevel: current.risk_level ?? getEnvironment(score).riskLevel,
+        approach: current.approach ?? getEnvironment(score).approach,
+      },
+      previousScore: validPreviousScore,
+      previousTradingDate: previous?.trading_date ?? null,
+      previousLabel: previous?.market_label ?? null,
+      scoreChange,
+      scoreTrend: getScoreTrend(scoreChange),
+      fiveDayAverage,
+      fiveDayAverageSampleSize: storedScores.length,
+      fiveDayAverageDates: data.map((row) => String(row.trading_date)),
+      components: {
+        trend: {
+          score: Number(current.trend_score),
+          maxScore: Number(current.trend_max_score) || 40,
+        },
+        momentum: {
+          score: Number(current.momentum_score),
+          maxScore: Number(current.momentum_max_score) || 25,
+        },
+        sectorStrength: {
+          score: Number(current.sector_strength_score),
+          maxScore: Number(current.sector_strength_max_score) || 20,
+        },
+        volatility: {
+          score: Number(current.volatility_score),
+          maxScore: Number(current.volatility_max_score) || 15,
+        },
+      },
+      dataQuality: {
+        status: "stored-fallback",
+        officialTradingDate: String(current.trading_date),
+      },
+      isFallback: true,
+      fallbackMessage:
+        "Showing the latest verified Market Score snapshot while live providers reconnect.",
+      updatedAt:
+        current.updated_at ??
+        current.captured_at ??
+        new Date().toISOString(),
+    };
+  } catch (fallbackError) {
+    console.error("Unexpected stored Market Score fallback error:", fallbackError);
+    return null;
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Route handler                                                              */
 /* -------------------------------------------------------------------------- */
@@ -926,28 +1188,97 @@ export async function GET() {
       ...SYMBOLS.sectors,
     ];
 
-    const { successful, failedSymbols } =
+    const { successful: rawSuccessful, failedSymbols: requestFailedSymbols } =
       await fetchAllMarketData(requestedSymbols);
 
-    const dataBySymbol = new Map(
-      successful.map((item) => [item.symbol, item]),
+    const rawDataBySymbol = new Map(
+      rawSuccessful.map((item) => [item.symbol, item]),
     );
 
-    const spy = dataBySymbol.get(SYMBOLS.spy);
-    const qqq = dataBySymbol.get(SYMBOLS.qqq);
-    const vix = dataBySymbol.get(SYMBOLS.vix);
+    const rawSpy = rawDataBySymbol.get(SYMBOLS.spy);
+    const rawQqq = rawDataBySymbol.get(SYMBOLS.qqq);
+    const rawVix = rawDataBySymbol.get(SYMBOLS.vix);
 
     const missingRequiredSymbols = [
-      !spy ? SYMBOLS.spy : null,
-      !qqq ? SYMBOLS.qqq : null,
-      !vix ? SYMBOLS.vix : null,
+      !rawSpy ? SYMBOLS.spy : null,
+      !rawQqq ? SYMBOLS.qqq : null,
+      !rawVix ? SYMBOLS.vix : null,
     ].filter((symbol): symbol is string => Boolean(symbol));
 
-    if (!spy || !qqq || !vix) {
+    if (!rawSpy || !rawQqq || !rawVix) {
       throw new Error(
         `Required index data is missing: ${missingRequiredSymbols.join(
           ", ",
         )}.`,
+      );
+    }
+
+    const easternSession = getEasternSession();
+    const acceptCurrentDate =
+      easternSession.isRegularSession ||
+      (easternSession.isWeekday && easternSession.minutes >= 16 * 60);
+    const eligibleSpyPoints = rawSpy.points.filter((point) => {
+      if (point.tradingDate < easternSession.tradingDate) {
+        return true;
+      }
+
+      return (
+        point.tradingDate === easternSession.tradingDate &&
+        acceptCurrentDate
+      );
+    });
+    const officialSpyPoint =
+      eligibleSpyPoints[eligibleSpyPoints.length - 1];
+
+    if (!officialSpyPoint) {
+      throw new Error(
+        "Unable to establish an official completed SPY trading date.",
+      );
+    }
+
+    // Yahoo updates the active daily candle with the live price, so comparing
+    // regularMarketPrice with that candle cannot prove the market is open.
+    const verifiedLiveSession =
+      easternSession.isRegularSession &&
+      rawSpy.marketState.toUpperCase() === "REGULAR";
+    const currentTradingDate = verifiedLiveSession
+      ? easternSession.tradingDate
+      : officialSpyPoint.tradingDate;
+    const useLiveSessionPrice = verifiedLiveSession;
+    const successful: MarketData[] = [];
+    const alignmentFailedSymbols: string[] = [];
+
+    rawSuccessful.forEach((item) => {
+      try {
+        successful.push(
+          alignMarketData(
+            item,
+            currentTradingDate,
+            useLiveSessionPrice,
+          ),
+        );
+      } catch (alignmentError) {
+        alignmentFailedSymbols.push(item.symbol);
+        console.error(
+          `Market Score date alignment failed for ${item.symbol}:`,
+          alignmentError,
+        );
+      }
+    });
+
+    const failedSymbols = Array.from(
+      new Set([...requestFailedSymbols, ...alignmentFailedSymbols]),
+    );
+    const dataBySymbol = new Map(
+      successful.map((item) => [item.symbol, item]),
+    );
+    const spy = dataBySymbol.get(SYMBOLS.spy);
+    const qqq = dataBySymbol.get(SYMBOLS.qqq);
+    const vix = dataBySymbol.get(SYMBOLS.vix);
+
+    if (!spy || !qqq || !vix) {
+      throw new Error(
+        "SPY, QQQ, and VIX must share the official Market Score trading date.",
       );
     }
 
@@ -981,7 +1312,7 @@ export async function GET() {
       volatility.score;
 
     const breadthConfirmation =
-      await getLatestBreadthConfirmation();
+      await getBreadthConfirmationForDate(currentTradingDate);
 
     const adjustedScore = clamp(
       rawScore + breadthConfirmation.adjustment,
@@ -992,8 +1323,6 @@ export async function GET() {
     const score = Math.round(adjustedScore);
     const label = getMarketLabel(score);
     const environment = getEnvironment(score);
-
-    const currentTradingDate = new Date().toISOString().slice(0, 10);
 
     let previousScore: number | null = null;
     let previousTradingDate: string | null = null;
@@ -1040,7 +1369,68 @@ export async function GET() {
 
     const scoreTrend = getScoreTrend(scoreChange);
 
+    let fiveDayAverage: number | null = null;
+    let fiveDayAverageSampleSize = 0;
+    let fiveDayAverageDates: string[] = [];
+
     try {
+      const { data: priorScoreRows, error: priorScoresError } =
+        await supabaseAdmin
+          .from("market_score_history")
+          .select("trading_date, market_score")
+          .lt("trading_date", currentTradingDate)
+          .order("trading_date", { ascending: false })
+          .limit(4);
+
+      if (priorScoresError) {
+        console.error(
+          "Unable to retrieve five-day Market Score history:",
+          priorScoresError,
+        );
+      } else {
+        const priorScores = (priorScoreRows ?? [])
+          .map((row) => ({
+            tradingDate: String(row.trading_date),
+            score: Number(row.market_score),
+          }))
+          .filter((row) => Number.isFinite(row.score));
+        const rollingScores = [
+          { tradingDate: currentTradingDate, score },
+          ...priorScores,
+        ].slice(0, 5);
+
+        fiveDayAverageSampleSize = rollingScores.length;
+        fiveDayAverageDates = rollingScores.map(
+          (row) => row.tradingDate,
+        );
+
+        if (rollingScores.length === 5) {
+          fiveDayAverage = round(
+            average(rollingScores.map((row) => row.score)),
+            1,
+          );
+        }
+      }
+    } catch (priorScoresError) {
+      console.error(
+        "Unexpected five-day Market Score history error:",
+        priorScoresError,
+      );
+    }
+
+    const shouldPersistHistory =
+      currentTradingDate === easternSession.tradingDate &&
+      easternSession.isWeekday &&
+      (easternSession.isRegularSession ||
+        (easternSession.minutes >= 16 * 60 &&
+          easternSession.minutes < 18 * 60));
+
+    const isFinalHistorySnapshot =
+      shouldPersistHistory &&
+      easternSession.minutes >= 16 * 60;
+
+    if (shouldPersistHistory) {
+      try {
       const { error: marketScoreHistoryError } =
         await supabaseAdmin
           .from("market_score_history")
@@ -1050,10 +1440,30 @@ export async function GET() {
 
               market_score: score,
               market_label: label,
-
+raw_score: round(rawScore),
+breadth_adjusted_score: round(adjustedScore),
+breadth_score: breadthConfirmation.snapshot?.score ?? null,
+breadth_label: breadthConfirmation.snapshot?.label ?? null,
+breadth_adjustment: breadthConfirmation.adjustment,
+breadth_trading_date:
+  breadthConfirmation.available
+    ? breadthConfirmation.snapshot?.tradingDate ?? null
+    : null,
+breadth_updated_at:
+  breadthConfirmation.available
+    ? breadthConfirmation.snapshot?.updatedAt ?? null
+    : null,
+broad_sectors_positive:
+  sectorStrength.details.dailyPositiveCount,
+broad_sectors_total:
+  sectorStrength.details.totalSectors,
               market_bias: environment.bias,
               risk_level: environment.riskLevel,
               approach: environment.approach,
+              snapshot_status: isFinalHistorySnapshot
+                ? "final"
+                : "intraday",
+              captured_at: new Date().toISOString(),
 
               trend_score: trend.score,
               trend_max_score: trend.maxScore,
@@ -1081,11 +1491,12 @@ export async function GET() {
           marketScoreHistoryError,
         );
       }
-    } catch (marketScoreHistoryError) {
-      console.error(
-        "Unexpected Market Score history error:",
-        marketScoreHistoryError,
-      );
+      } catch (marketScoreHistoryError) {
+        console.error(
+          "Unexpected Market Score history error:",
+          marketScoreHistoryError,
+        );
+      }
     }
 
     const partialData =
@@ -1106,6 +1517,9 @@ export async function GET() {
         previousLabel,
         scoreChange,
         scoreTrend,
+        fiveDayAverage,
+        fiveDayAverageSampleSize,
+        fiveDayAverageDates,
         comparison: {
           currentScore: score,
           currentTradingDate,
@@ -1143,6 +1557,18 @@ export async function GET() {
           missingSectorSymbols,
           minimumRequiredSectors:
             MINIMUM_REQUIRED_SECTORS,
+          officialTradingDate: currentTradingDate,
+          easternSessionDate: easternSession.tradingDate,
+          regularSessionActive: easternSession.isRegularSession,
+          liveSessionPriceUsed: useLiveSessionPrice,
+          historyWriteAllowed: shouldPersistHistory,
+          inputDates: successful.map((item) => ({
+            symbol: item.symbol,
+            scoringDate: item.tradingDate,
+            sourceTradingDate: item.sourceTradingDate,
+            marketState: item.marketState,
+            sessionPriceUsed: item.sessionPriceUsed,
+          })),
         },
         source: "Yahoo Finance",
         updatedAt: new Date().toISOString(),
@@ -1156,6 +1582,22 @@ export async function GET() {
     );
   } catch (error) {
     console.error("Market score route error:", error);
+
+    const storedFallback = await getStoredMarketScoreFallback();
+
+    if (storedFallback) {
+      return NextResponse.json(
+        {
+          success: true,
+          ...storedFallback,
+        },
+        {
+          headers: {
+            "Cache-Control": "no-store, max-age=0",
+          },
+        },
+      );
+    }
 
     return NextResponse.json(
       {

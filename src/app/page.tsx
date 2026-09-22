@@ -19,6 +19,14 @@ export const metadata: Metadata = {
     url: "https://maicatrades.com",
     siteName: "MaicaTrades",
     type: "website",
+    images: [
+      {
+        url: "https://maicatrades.com/opengraph-image.png",
+        width: 1734,
+        height: 907,
+        alt: "MaicaTrades swing trading tools and market analysis",
+      },
+    ],
   },
 
   twitter: {
@@ -26,6 +34,7 @@ export const metadata: Metadata = {
     title: "MaicaTrades | Swing Trading Tools & Market Analysis",
     description:
       "A simplified market dashboard and swing-trading toolkit built for busy traders.",
+    images: ["https://maicatrades.com/opengraph-image.png"],
   },
 };
 

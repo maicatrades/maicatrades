@@ -18,6 +18,19 @@ type MarketEnvironment = {
   approach: string;
 };
 
+type MarketPulseSummary = {
+  bullish: number;
+  neutral: number;
+  watch: number;
+  lowRisk: number;
+  riskSignals: number;
+  positiveBenchmarks: number;
+  negativeBenchmarks: number;
+  totalMarketBenchmarks: number;
+  averageMarketChange: number;
+  marketTone: string;
+};
+
 type SectorPerformanceItem = {
   name: string;
   symbol: string;
@@ -34,9 +47,12 @@ type ScoreTrend =
 
 type DashboardSummaryProps = {
   environment: MarketEnvironment | null;
-  score: number;
+  score: number | null;
   scoreColor: string;
   marketScoreLoading: boolean;
+
+  marketPulseSummary?: MarketPulseSummary | null;
+  marketPulseLoading?: boolean;
 
   previousScore?: number | null;
   previousTradingDate?: string | null;
@@ -76,7 +92,11 @@ function SummaryCard({
   );
 
   if (!href) {
-    return <div className="block rounded-xl">{card}</div>;
+    return (
+      <div className="block rounded-xl">
+        {card}
+      </div>
+    );
   }
 
   return (
@@ -104,11 +124,15 @@ function getEnvironmentStyle(bias?: string) {
     };
   }
 
-  if (bias === "Bearish" || bias === "Strong Bearish") {
+  if (
+    bias === "Bearish" ||
+    bias === "Strong Bearish"
+  ) {
     return {
       icon: TrendingDown,
       iconClass: "text-red-400",
-      containerClass: "border-red-500/20 bg-red-500/10",
+      containerClass:
+        "border-red-500/20 bg-red-500/10",
     };
   }
 
@@ -170,7 +194,9 @@ function getRiskStyle(riskLevel?: string) {
   };
 }
 
-function getScoreTrendStyle(scoreTrend?: string | null) {
+function getScoreTrendStyle(
+  scoreTrend?: string | null,
+) {
   if (scoreTrend === "Improving") {
     return {
       icon: ArrowUpRight,
@@ -184,7 +210,8 @@ function getScoreTrendStyle(scoreTrend?: string | null) {
     return {
       icon: ArrowDownRight,
       textClass: "text-red-400",
-      containerClass: "border-red-500/20 bg-red-500/10",
+      containerClass:
+        "border-red-500/20 bg-red-500/10",
     };
   }
 
@@ -219,12 +246,16 @@ function getSectorTitleSize(name?: string) {
   return "text-3xl";
 }
 
-function formatComparisonDate(date?: string | null) {
+function formatComparisonDate(
+  date?: string | null,
+) {
   if (!date) {
     return null;
   }
 
-  const parsedDate = new Date(`${date}T12:00:00`);
+  const parsedDate = new Date(
+    `${date}T12:00:00`,
+  );
 
   if (Number.isNaN(parsedDate.getTime())) {
     return date;
@@ -236,11 +267,68 @@ function formatComparisonDate(date?: string | null) {
   }).format(parsedDate);
 }
 
+function getSessionRiskAdjustment(
+  marketPulseSummary?: MarketPulseSummary | null,
+) {
+  if (!marketPulseSummary) {
+    return 0;
+  }
+
+  const {
+    marketTone,
+    averageMarketChange,
+    negativeBenchmarks,
+    totalMarketBenchmarks,
+  } = marketPulseSummary;
+
+  let adjustment = 0;
+
+  if (marketTone === "Strong selling pressure") {
+    adjustment = 25;
+  } else if (marketTone === "Defensive") {
+    adjustment = 15;
+  } else if (marketTone === "Cautious") {
+    adjustment = 8;
+  } else if (marketTone === "Strong buying pressure") {
+    adjustment = -10;
+  } else if (marketTone === "Constructive") {
+    adjustment = -5;
+  }
+
+  if (
+    totalMarketBenchmarks > 0 &&
+    negativeBenchmarks === totalMarketBenchmarks &&
+    averageMarketChange <= -1.5
+  ) {
+    adjustment += 5;
+  }
+
+  return Math.max(-15, Math.min(30, adjustment));
+}
+
+function getRiskLevel(riskScore: number) {
+  if (riskScore >= 70) {
+    return "High";
+  }
+
+  if (riskScore >= 50) {
+    return "Elevated";
+  }
+
+  if (riskScore >= 25) {
+    return "Moderate";
+  }
+
+  return "Low";
+}
+
 export default function DashboardSummary({
   environment,
   score,
   scoreColor,
   marketScoreLoading,
+  marketPulseSummary = null,
+  marketPulseLoading = true,
   previousScore = null,
   previousTradingDate = null,
   scoreChange = null,
@@ -249,19 +337,50 @@ export default function DashboardSummary({
   weakestSector,
   sectorLoading,
 }: DashboardSummaryProps) {
-  const riskScore = Math.max(0, Math.min(100, 100 - score));
+  const scoreUnavailable = !marketScoreLoading && score === null;
+  const baseRiskScore =
+    score === null
+      ? null
+      : Math.max(0, Math.min(100, 100 - score));
 
-  const environmentStyle = getEnvironmentStyle(environment?.bias);
-  const EnvironmentIcon = environmentStyle.icon;
+  const sessionRiskAdjustment =
+    getSessionRiskAdjustment(
+      marketPulseSummary,
+    );
 
-  const riskStyle = getRiskStyle(environment?.riskLevel);
+  const riskScore =
+    baseRiskScore === null
+      ? null
+      : Math.max(
+          0,
+          Math.min(100, baseRiskScore + sessionRiskAdjustment),
+        );
 
-  const trendStyle = getScoreTrendStyle(scoreTrend);
-  const ScoreTrendIcon = trendStyle.icon;
+  const riskLevel =
+    riskScore === null ? "Unavailable" : getRiskLevel(riskScore);
 
-  const formattedPreviousDate = formatComparisonDate(
-    previousTradingDate,
-  );
+  const riskLoading =
+    marketScoreLoading || marketPulseLoading;
+
+  const environmentStyle =
+    getEnvironmentStyle(environment?.bias);
+
+  const EnvironmentIcon =
+    environmentStyle.icon;
+
+  const riskStyle =
+    getRiskStyle(riskLevel);
+
+  const trendStyle =
+    getScoreTrendStyle(scoreTrend);
+
+  const ScoreTrendIcon =
+    trendStyle.icon;
+
+  const formattedPreviousDate =
+    formatComparisonDate(
+      previousTradingDate,
+    );
 
   const hasComparison =
     previousScore !== null &&
@@ -281,24 +400,33 @@ export default function DashboardSummary({
         >
           <EnvironmentIcon
             size={25}
-            className={environmentStyle.iconClass}
+            className={
+              environmentStyle.iconClass
+            }
           />
         </div>
 
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Today&apos;s Environment
-        </p>
+       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+  Market Environment
+</p>
 
-        <p className={`mt-5 text-3xl font-bold ${scoreColor}`}>
-          {environment?.bias ?? "Loading"}
+        <p
+          className={`mt-5 text-3xl font-bold ${scoreColor}`}
+        >
+          {marketScoreLoading
+            ? "Loading"
+            : environment?.bias ?? "Unavailable"}
         </p>
 
         <p className="mt-3 max-w-[230px] pr-5 text-sm leading-6 text-slate-400">
-          {environment?.approach ??
-            "Calculating current conditions..."}
-        </p>
+  {marketScoreLoading
+    ? "Calculating broader market conditions..."
+    : scoreUnavailable
+      ? "Waiting for verified Market Score data. This card will refresh automatically."
+      : "The broader market trend remains constructive. Check Market Outlook and Today’s Risk for current-session conditions."}
+</p>
 
-        {!marketScoreLoading && (
+        {!marketScoreLoading && !scoreUnavailable && (
           <div className="mt-4 pr-20">
             {hasComparison ? (
               <div
@@ -308,14 +436,22 @@ export default function DashboardSummary({
 
                 <span>{scoreTrend}</span>
 
-                <span className="text-slate-500">•</span>
+                <span className="text-slate-500">
+                  •
+                </span>
 
-                <span>{formattedScoreChange} points</span>
+                <span>
+                  {formattedScoreChange} points
+                </span>
 
                 {formattedPreviousDate && (
                   <>
-                    <span className="text-slate-500">since</span>
-                    <span>{formattedPreviousDate}</span>
+                    <span className="text-slate-500">
+                      since
+                    </span>
+                    <span>
+                      {formattedPreviousDate}
+                    </span>
                   </>
                 )}
               </div>
@@ -324,7 +460,9 @@ export default function DashboardSummary({
                 className={`inline-flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium ${trendStyle.containerClass} ${trendStyle.textClass}`}
               >
                 <ScoreTrendIcon size={14} />
-                <span>Baseline established</span>
+                <span>
+                  Baseline established
+                </span>
               </div>
             )}
           </div>
@@ -336,7 +474,10 @@ export default function DashboardSummary({
         ariaLabel="View detailed leading sector performance"
       >
         <div className="absolute right-4 top-4 rounded-xl border border-blue-500/20 bg-blue-500/10 p-3">
-          <BarChart3 size={25} className="text-blue-400" />
+          <BarChart3
+            size={25}
+            className="text-blue-400"
+          />
         </div>
 
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -351,7 +492,8 @@ export default function DashboardSummary({
           >
             {sectorLoading
               ? "Loading"
-              : leadingSector?.name ?? "Unavailable"}
+              : leadingSector?.name ??
+                "Unavailable"}
           </p>
 
           <div className="mt-4 flex items-center gap-3">
@@ -369,8 +511,13 @@ export default function DashboardSummary({
             >
               {leadingSector
                 ? `${
-                    leadingSector.changePercent >= 0 ? "+" : ""
-                  }${leadingSector.changePercent.toFixed(2)}%`
+                    leadingSector.changePercent >=
+                    0
+                      ? "+"
+                      : ""
+                  }${leadingSector.changePercent.toFixed(
+                    2,
+                  )}%`
                 : "—"}
             </span>
           </div>
@@ -378,7 +525,9 @@ export default function DashboardSummary({
 
         {leadingSector && (
           <p className="absolute bottom-4 left-5 text-xs text-slate-500">
-            ${leadingSector.price.toFixed(2)} current price
+            $
+            {leadingSector.price.toFixed(2)}{" "}
+            current price
           </p>
         )}
       </SummaryCard>
@@ -388,7 +537,10 @@ export default function DashboardSummary({
         ariaLabel="View detailed weakest sector performance"
       >
         <div className="absolute right-4 top-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3">
-          <TrendingDown size={25} className="text-red-400" />
+          <TrendingDown
+            size={25}
+            className="text-red-400"
+          />
         </div>
 
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -403,7 +555,8 @@ export default function DashboardSummary({
           >
             {sectorLoading
               ? "Loading"
-              : weakestSector?.name ?? "Unavailable"}
+              : weakestSector?.name ??
+                "Unavailable"}
           </p>
 
           <div className="mt-4 flex items-center justify-center gap-3">
@@ -421,8 +574,13 @@ export default function DashboardSummary({
             >
               {weakestSector
                 ? `${
-                    weakestSector.changePercent >= 0 ? "+" : ""
-                  }${weakestSector.changePercent.toFixed(2)}%`
+                    weakestSector.changePercent >=
+                    0
+                      ? "+"
+                      : ""
+                  }${weakestSector.changePercent.toFixed(
+                    2,
+                  )}%`
                 : "—"}
             </span>
           </div>
@@ -430,7 +588,9 @@ export default function DashboardSummary({
 
         {weakestSector && (
           <p className="absolute bottom-4 left-5 text-xs text-slate-500">
-            ${weakestSector.price.toFixed(2)} current price
+            $
+            {weakestSector.price.toFixed(2)}{" "}
+            current price
           </p>
         )}
       </SummaryCard>
@@ -441,7 +601,9 @@ export default function DashboardSummary({
         >
           <ShieldAlert
             size={25}
-            className={riskStyle.iconClass}
+            className={
+              riskStyle.iconClass
+            }
           />
         </div>
 
@@ -452,15 +614,23 @@ export default function DashboardSummary({
         <p
           className={`mt-5 text-3xl font-bold ${riskStyle.textClass}`}
         >
-          {environment?.riskLevel ?? "Loading"}
+          {riskLoading
+            ? "Loading"
+            : riskLevel}
         </p>
 
         <div className="mt-4">
           <div className="mb-2 flex justify-between text-xs">
-            <span className="text-slate-500">Risk Score</span>
+            <span className="text-slate-500">
+              Risk Score
+            </span>
 
             <span className="font-semibold text-slate-200">
-              {marketScoreLoading ? "--" : `${riskScore}/100`}
+              {riskLoading
+                ? "--"
+                : riskScore === null
+                  ? "—"
+                  : `${riskScore}/100`}
             </span>
           </div>
 
@@ -468,7 +638,11 @@ export default function DashboardSummary({
             <div
               className={`h-full rounded-full transition-all duration-500 ${riskStyle.barClass}`}
               style={{
-                width: `${marketScoreLoading ? 0 : riskScore}%`,
+                width: `${
+                  riskLoading || riskScore === null
+                    ? 0
+                    : riskScore
+                }%`,
               }}
             />
           </div>

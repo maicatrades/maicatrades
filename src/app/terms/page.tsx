@@ -7,7 +7,25 @@ import {
   Scale,
   ShieldCheck,
 } from "lucide-react";
+import type { Metadata } from "next";
+export const metadata: Metadata = {
+  title: "Terms of Service | MaicaTrades",
 
+  description:
+    "Read the MaicaTrades Terms of Service covering website use, educational content, user responsibilities, intellectual property, third-party services, and limitations of liability.",
+
+  alternates: {
+    canonical: "/terms",
+  },
+
+  openGraph: {
+    title: "Terms of Service | MaicaTrades",
+    description:
+      "Review the terms that govern use of the MaicaTrades website, tools, educational content, and related services.",
+    url: "/terms",
+    type: "website",
+  },
+};
 export default function TermsPage() {
   return (
     <main className="min-h-screen bg-[#050b12] text-white">

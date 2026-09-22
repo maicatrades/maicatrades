@@ -95,6 +95,30 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.7,
     },
     {
+      url: `${baseUrl}/blog/what-is-maicatrades-market-score`,
+      lastModified: new Date("2026-08-20"),
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
+      url: `${baseUrl}/blog/how-to-read-a-stock-chart`,
+      lastModified: new Date("2026-08-21"),
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
+      url: `${baseUrl}/blog/position-sizing-explained`,
+      lastModified: new Date("2026-08-24"),
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
+      url: `${baseUrl}/blog/position-size-vs-buying-power`,
+      lastModified: new Date("2026-09-03"),
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
       url: `${baseUrl}/about`,
       lastModified: new Date(),
       changeFrequency: "monthly",

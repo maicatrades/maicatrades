@@ -10,7 +10,6 @@ import {
   Clock3,
   Eye,
   ListChecks,
-  Plus,
   RefreshCw,
   Star,
 } from "lucide-react";
@@ -212,13 +211,6 @@ export default function WatchlistPage() {
                 {refreshing ? "Refreshing" : "Refresh Data"}
               </button>
 
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-400"
-              >
-                <Plus size={17} />
-                Add Symbol
-              </button>
             </div>
           </div>
         </section>

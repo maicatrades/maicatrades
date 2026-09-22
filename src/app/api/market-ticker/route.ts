@@ -2,47 +2,82 @@ import { NextResponse } from "next/server";
 
 export const revalidate = 300;
 
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const REQUEST_TIMEOUT_MS = 10_000;
 const CACHE_SECONDS = 300;
 const MINIMUM_REQUIRED_TICKERS = 4;
 
 const TICKER_SYMBOLS = [
-  { symbol: "SPY", yahooSymbol: "SPY" },
-  { symbol: "QQQ", yahooSymbol: "QQQ" },
-  { symbol: "DIA", yahooSymbol: "DIA" },
-  { symbol: "IWM", yahooSymbol: "IWM" },
-  { symbol: "VIX", yahooSymbol: "^VIX" },
+  { symbol: "SPY", finnhubSymbol: "SPY", yahooSymbol: "SPY" },
+  { symbol: "QQQ", finnhubSymbol: "QQQ", yahooSymbol: "QQQ" },
+  { symbol: "DIA", finnhubSymbol: "DIA", yahooSymbol: "DIA" },
+  { symbol: "IWM", finnhubSymbol: "IWM", yahooSymbol: "IWM" },
+  { symbol: "VIX", finnhubSymbol: "^VIX", yahooSymbol: "^VIX" },
 ];
 
+type TickerDefinition = (typeof TICKER_SYMBOLS)[number];
 type YahooHost = "query1" | "query2";
+type Session = "PRE" | "REGULAR" | "AH";
+
+type FinnhubQuote = {
+  c?: number;
+  d?: number;
+  dp?: number;
+  h?: number;
+  l?: number;
+  o?: number;
+  pc?: number;
+  t?: number;
+};
+
+type TradingPeriod = {
+  start?: number;
+  end?: number;
+};
 
 type YahooChartMeta = {
   regularMarketPrice?: number;
   regularMarketTime?: number;
   currency?: string;
-  marketState?: string;
-};
-
-type YahooQuoteIndicators = {
-  close?: Array<number | null>;
-};
-
-type YahooChartResult = {
-  meta?: YahooChartMeta;
-  timestamp?: number[];
-  indicators?: {
-    quote?: YahooQuoteIndicators[];
+  currentTradingPeriod?: {
+    pre?: TradingPeriod;
+    regular?: TradingPeriod;
+    post?: TradingPeriod;
   };
 };
 
 type YahooChartResponse = {
   chart?: {
-    result?: YahooChartResult[];
-    error?: {
-      code?: string;
-      description?: string;
-    } | null;
+    result?: Array<{
+      meta?: YahooChartMeta;
+      timestamp?: number[];
+      indicators?: {
+        quote?: Array<{
+          close?: Array<number | null>;
+          high?: Array<number | null>;
+          low?: Array<number | null>;
+          volume?: Array<number | null>;
+        }>;
+      };
+    }>;
+    error?: { description?: string } | null;
   };
+};
+
+type YahooExtendedData = {
+  session: Session;
+  price: number | null;
+  regularMarketPrice: number | null;
+  quoteTime: number | null;
+  currency: string;
+  sessionHigh: number | null;
+  sessionLow: number | null;
+  sessionVolume: number | null;
+};
+
+type DailyLevels = {
+  previousDayHigh: number | null;
+  previousDayLow: number | null;
 };
 
 type MarketTickerItem = {
@@ -52,12 +87,22 @@ type MarketTickerItem = {
   previousClose: number;
   change: number;
   changePercent: number;
+  regularPrice: number;
+  extendedHoursPrice: number | null;
+  session: Session;
+  sessionLabel: "PRE" | "AH" | null;
   currency: string;
-  marketState: string;
+  marketState: Session;
+  quoteTime: number | null;
   regularMarketTime: number | null;
+  regularSource: "Finnhub" | "Yahoo Finance";
+  extendedHoursSource: "Yahoo Finance" | null;
+  premarketHigh: number | null;
+  premarketLow: number | null;
+  premarketVolume: number | null;
+  previousDayHigh: number | null;
+  previousDayLow: number | null;
 };
-
-type FetchOptions = Parameters<typeof fetch>[1];
 
 function isValidNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -65,68 +110,82 @@ function isValidNumber(value: unknown): value is number {
 
 function round(value: number, decimals = 2) {
   const multiplier = 10 ** decimals;
-
   return Math.round(value * multiplier) / multiplier;
 }
 
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    if (error.name === "AbortError") {
-      return "The request timed out.";
-    }
-
-    return error.message;
-  }
-
-  return String(error);
+function isWithin(timestamp: number, period?: TradingPeriod) {
+  return (
+    isValidNumber(period?.start) &&
+    isValidNumber(period?.end) &&
+    timestamp >= period.start &&
+    timestamp <= period.end
+  );
 }
 
-async function fetchWithTimeout(
-  url: string,
-  options: FetchOptions,
-  timeoutMs = REQUEST_TIMEOUT_MS,
-) {
-  const controller = new AbortController();
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+async function fetchWithTimeout(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
     return await fetch(url, {
-      ...options,
       signal: controller.signal,
+      next: { revalidate: CACHE_SECONDS },
+      headers: {
+        Accept: "application/json",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+      },
     });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function requestTickerData(
+async function fetchFinnhubQuote(ticker: TickerDefinition) {
+  if (!FINNHUB_API_KEY) {
+    throw new Error("Finnhub API key is missing.");
+  }
+
+  const url =
+    "https://finnhub.io/api/v1/quote?symbol=" +
+    `${encodeURIComponent(ticker.finnhubSymbol)}` +
+    `&token=${FINNHUB_API_KEY}`;
+  const response = await fetchWithTimeout(url);
+
+  if (!response.ok) {
+    throw new Error(
+      `Finnhub returned HTTP ${response.status} for ${ticker.symbol}.`,
+    );
+  }
+
+  const quote = (await response.json()) as FinnhubQuote;
+
+  if (
+    !isValidNumber(quote.c) ||
+    quote.c <= 0 ||
+    !isValidNumber(quote.pc) ||
+    quote.pc <= 0
+  ) {
+    throw new Error(`Finnhub returned an invalid quote for ${ticker.symbol}.`);
+  }
+
+  return quote;
+}
+
+async function requestYahooExtendedData(
   host: YahooHost,
-  ticker: (typeof TICKER_SYMBOLS)[number],
-): Promise<MarketTickerItem> {
+  ticker: TickerDefinition,
+): Promise<YahooExtendedData> {
   const url =
     `https://${host}.finance.yahoo.com/v8/finance/chart/` +
     `${encodeURIComponent(ticker.yahooSymbol)}` +
-    "?interval=1d&range=10d&includePrePost=false";
-
-  const response = await fetchWithTimeout(
-    url,
-    {
-      next: {
-        revalidate: CACHE_SECONDS,
-      },
-      headers: {
-        Accept: "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-          "AppleWebKit/537.36 (KHTML, like Gecko) " +
-          "Chrome/120 Safari/537.36",
-      },
-    },
-    REQUEST_TIMEOUT_MS,
-  );
+    "?interval=5m&range=1d&includePrePost=true";
+  const response = await fetchWithTimeout(url);
 
   if (!response.ok) {
     throw new Error(
@@ -134,15 +193,7 @@ async function requestTickerData(
     );
   }
 
-  let data: YahooChartResponse;
-
-  try {
-    data = (await response.json()) as YahooChartResponse;
-  } catch {
-    throw new Error(
-      `Yahoo ${host} returned invalid JSON for ${ticker.symbol}.`,
-    );
-  }
+  const data = (await response.json()) as YahooChartResponse;
 
   if (data.chart?.error) {
     throw new Error(
@@ -152,82 +203,267 @@ async function requestTickerData(
   }
 
   const result = data.chart?.result?.[0];
+  const meta = result?.meta;
 
-  if (!result) {
+  if (!result || !meta) {
+    throw new Error(`Yahoo returned no chart data for ${ticker.symbol}.`);
+  }
+
+  const timestamps = result.timestamp ?? [];
+  const closes = result.indicators?.quote?.[0]?.close ?? [];
+  const highs = result.indicators?.quote?.[0]?.high ?? [];
+  const lows = result.indicators?.quote?.[0]?.low ?? [];
+  const volumes = result.indicators?.quote?.[0]?.volume ?? [];
+  const points = timestamps
+    .map((timestamp, index) => ({
+      timestamp,
+      close: closes[index],
+      high: highs[index],
+      low: lows[index],
+      volume: volumes[index],
+    }))
+    .filter(
+      (point): point is {
+        timestamp: number;
+        close: number;
+        high: number | null;
+        low: number | null;
+        volume: number | null;
+      } =>
+        isValidNumber(point.timestamp) &&
+        isValidNumber(point.close) &&
+        point.close > 0,
+    );
+  const latestPoint = points[points.length - 1];
+
+  if (!latestPoint) {
+    throw new Error(`Yahoo returned no valid chart points for ${ticker.symbol}.`);
+  }
+
+  const premarketPoints = points.filter((point) =>
+    isWithin(point.timestamp, meta.currentTradingPeriod?.pre),
+  );
+  const premarketHighs = premarketPoints
+    .map((point) => point.high)
+    .filter(isValidNumber);
+  const premarketLows = premarketPoints
+    .map((point) => point.low)
+    .filter(isValidNumber);
+  const premarketVolumes = premarketPoints
+    .map((point) => point.volume)
+    .filter(isValidNumber);
+
+  let session: Session = "REGULAR";
+  const periods = meta.currentTradingPeriod;
+
+  if (isWithin(latestPoint.timestamp, periods?.pre)) {
+    session = "PRE";
+  } else if (isWithin(latestPoint.timestamp, periods?.post)) {
+    session = "AH";
+  }
+
+  return {
+    session,
+    price: session === "REGULAR" ? null : latestPoint.close,
+    regularMarketPrice: isValidNumber(meta.regularMarketPrice)
+      ? meta.regularMarketPrice
+      : null,
+    quoteTime: latestPoint.timestamp,
+    currency: meta.currency ?? "USD",
+    sessionHigh:
+      premarketHighs.length > 0 ? Math.max(...premarketHighs) : null,
+    sessionLow:
+      premarketLows.length > 0 ? Math.min(...premarketLows) : null,
+    sessionVolume:
+      premarketVolumes.length > 0
+        ? premarketVolumes.reduce((sum, value) => sum + value, 0)
+        : null,
+  };
+}
+
+async function requestYahooDailyLevels(
+  host: YahooHost,
+  ticker: TickerDefinition,
+): Promise<DailyLevels> {
+  const url =
+    `https://${host}.finance.yahoo.com/v8/finance/chart/` +
+    `${encodeURIComponent(ticker.yahooSymbol)}` +
+    "?interval=1d&range=10d&includePrePost=false";
+  const response = await fetchWithTimeout(url);
+  if (!response.ok) throw new Error(`Yahoo daily levels failed for ${ticker.symbol}.`);
+  const data = (await response.json()) as YahooChartResponse;
+  const result = data.chart?.result?.[0];
+  const timestamps = result?.timestamp ?? [];
+  const quote = result?.indicators?.quote?.[0];
+  const candles = timestamps
+    .map((timestamp, index) => ({
+      timestamp,
+      high: quote?.high?.[index],
+      low: quote?.low?.[index],
+    }))
+    .filter(
+      (candle): candle is { timestamp: number; high: number; low: number } =>
+        isValidNumber(candle.timestamp) &&
+        isValidNumber(candle.high) &&
+        isValidNumber(candle.low),
+    );
+  const latest = candles[candles.length - 1];
+  return {
+    previousDayHigh: latest?.high ?? null,
+    previousDayLow: latest?.low ?? null,
+  };
+}
+
+async function fetchYahooDailyLevels(ticker: TickerDefinition) {
+  try {
+    return await requestYahooDailyLevels("query1", ticker);
+  } catch {
+    return requestYahooDailyLevels("query2", ticker);
+  }
+}
+
+async function fetchYahooExtendedData(ticker: TickerDefinition) {
+  try {
+    return await requestYahooExtendedData("query1", ticker);
+  } catch (query1Error) {
+    console.warn(
+      `Yahoo query1 failed for ${ticker.symbol}; trying query2.`,
+      getErrorMessage(query1Error),
+    );
+
+    return requestYahooExtendedData("query2", ticker);
+  }
+}
+
+async function requestYahooRegularQuote(
+  host: YahooHost,
+  ticker: TickerDefinition,
+): Promise<FinnhubQuote> {
+  const url =
+    `https://${host}.finance.yahoo.com/v8/finance/chart/` +
+    `${encodeURIComponent(ticker.yahooSymbol)}` +
+    "?interval=1d&range=10d&includePrePost=false";
+  const response = await fetchWithTimeout(url);
+
+  if (!response.ok) {
     throw new Error(
-      `Yahoo ${host} returned no market data for ${ticker.symbol}.`,
+      `Yahoo ${host} returned HTTP ${response.status} for ${ticker.symbol}.`,
     );
   }
 
-  const meta = result.meta;
-  const regularMarketPrice = meta?.regularMarketPrice;
+  const data = (await response.json()) as YahooChartResponse;
 
-  const rawCloses =
-    result.indicators?.quote?.[0]?.close ?? [];
-
-  const validCloses = rawCloses.filter(isValidNumber);
-
-  if (validCloses.length < 2) {
+  if (data.chart?.error) {
     throw new Error(
-      `Yahoo returned insufficient closing-price history for ${ticker.symbol}.`,
+      data.chart.error.description ??
+        `Yahoo ${host} returned an error for ${ticker.symbol}.`,
     );
   }
 
-  /*
-   * Yahoo's newest daily candle may represent the current
-   * trading session.
-   *
-   * When it matches regularMarketPrice, the second-to-last
-   * daily close is the true previous session close.
-   *
-   * Otherwise, the final daily close is used as the previous
-   * completed session.
-   */
-  const latestDailyClose =
-    validCloses[validCloses.length - 1];
+  const result = data.chart?.result?.[0];
+  const meta = result?.meta;
+  const validCloses = (
+    result?.indicators?.quote?.[0]?.close ?? []
+  ).filter(isValidNumber);
 
-  const secondLatestDailyClose =
-    validCloses[validCloses.length - 2];
+  if (!result || !meta || validCloses.length < 2) {
+    throw new Error(`Yahoo returned insufficient data for ${ticker.symbol}.`);
+  }
 
-  const price = isValidNumber(regularMarketPrice)
-    ? regularMarketPrice
-    : latestDailyClose;
+  const latestClose = validCloses[validCloses.length - 1];
+  const secondLatestClose = validCloses[validCloses.length - 2];
+  const currentPrice = isValidNumber(meta.regularMarketPrice)
+    ? meta.regularMarketPrice
+    : latestClose;
+  const previousClose =
+    Math.abs(currentPrice - latestClose) < 0.01
+      ? secondLatestClose
+      : latestClose;
+  const change = currentPrice - previousClose;
 
-  if (!isValidNumber(price) || price <= 0) {
-    throw new Error(
-      `Yahoo returned an invalid current price for ${ticker.symbol}.`,
+  return {
+    c: currentPrice,
+    pc: previousClose,
+    d: change,
+    dp: (change / previousClose) * 100,
+    t: meta.regularMarketTime,
+  };
+}
+
+async function fetchYahooRegularQuote(ticker: TickerDefinition) {
+  try {
+    return await requestYahooRegularQuote("query1", ticker);
+  } catch (query1Error) {
+    console.warn(
+      `Yahoo regular query1 failed for ${ticker.symbol}; trying query2.`,
+      getErrorMessage(query1Error),
+    );
+
+    return requestYahooRegularQuote("query2", ticker);
+  }
+}
+
+async function getTickerData(
+  ticker: TickerDefinition,
+): Promise<MarketTickerItem> {
+  let regularQuote: FinnhubQuote;
+  let regularSource: "Finnhub" | "Yahoo Finance" = "Finnhub";
+
+  try {
+    regularQuote = await fetchFinnhubQuote(ticker);
+  } catch (error) {
+    console.warn(
+      `Finnhub quote unavailable for ${ticker.symbol}; using Yahoo regular-session fallback.`,
+      getErrorMessage(error),
+    );
+
+    regularQuote = await fetchYahooRegularQuote(ticker);
+    regularSource = "Yahoo Finance";
+  }
+
+  let yahooData: YahooExtendedData | null = null;
+  let dailyLevels: DailyLevels = {
+    previousDayHigh: null,
+    previousDayLow: null,
+  };
+
+  try {
+    [yahooData, dailyLevels] = await Promise.all([
+      fetchYahooExtendedData(ticker),
+      fetchYahooDailyLevels(ticker),
+    ]);
+  } catch (error) {
+    console.warn(
+      `Extended-hours data unavailable for ${ticker.symbol}; using regular-session quote.`,
+      getErrorMessage(error),
     );
   }
 
-  let previousClose: number;
-
-  if (Math.abs(price - latestDailyClose) < 0.01) {
-    previousClose = secondLatestDailyClose;
-  } else {
-    previousClose = latestDailyClose;
-  }
-
-  if (
-    !isValidNumber(previousClose) ||
-    previousClose <= 0
-  ) {
-    throw new Error(
-      `Yahoo returned an invalid previous close for ${ticker.symbol}.`,
-    );
-  }
-
-  const change = price - previousClose;
+  const regularPrice = regularQuote.c as number;
+  const session = yahooData?.session ?? "REGULAR";
+  // Extended-hours moves use the most recent regular close, not Finnhub's
+  // prior-session reference (which would include yesterday's regular move).
+  const previousClose =
+    session === "REGULAR"
+      ? (regularQuote.pc as number)
+      : isValidNumber(yahooData?.regularMarketPrice) &&
+          yahooData.regularMarketPrice > 0
+        ? yahooData.regularMarketPrice
+        : regularPrice;
+  const extendedPrice =
+    session !== "REGULAR" && isValidNumber(yahooData?.price)
+      ? yahooData.price
+      : null;
+  const price = extendedPrice ?? regularPrice;
+  const comparisonPrice = previousClose;
+  const change =
+    session === "REGULAR" && isValidNumber(regularQuote.d)
+      ? regularQuote.d
+      : price - comparisonPrice;
   const changePercent =
-    (change / previousClose) * 100;
-
-  if (
-    !Number.isFinite(change) ||
-    !Number.isFinite(changePercent)
-  ) {
-    throw new Error(
-      `Unable to calculate price movement for ${ticker.symbol}.`,
-    );
-  }
+    session === "REGULAR" && isValidNumber(regularQuote.dp)
+      ? regularQuote.dp
+      : (change / comparisonPrice) * 100;
 
   return {
     symbol: ticker.symbol,
@@ -236,202 +472,109 @@ async function requestTickerData(
     previousClose: round(previousClose),
     change: round(change),
     changePercent: round(changePercent),
-    currency: meta?.currency ?? "USD",
-    marketState: meta?.marketState ?? "UNKNOWN",
-    regularMarketTime: isValidNumber(
-      meta?.regularMarketTime,
-    )
-      ? meta.regularMarketTime
+    regularPrice: round(regularPrice),
+    extendedHoursPrice: extendedPrice === null ? null : round(extendedPrice),
+    session,
+    sessionLabel: session === "REGULAR" ? null : session,
+    currency: yahooData?.currency ?? "USD",
+    marketState: session,
+    quoteTime:
+      extendedPrice !== null
+        ? yahooData?.quoteTime ?? null
+        : isValidNumber(regularQuote.t)
+          ? regularQuote.t
+          : null,
+    regularMarketTime: isValidNumber(regularQuote.t) ? regularQuote.t : null,
+    regularSource,
+    extendedHoursSource: extendedPrice === null ? null : "Yahoo Finance",
+    premarketHigh:
+      session === "PRE" && isValidNumber(yahooData?.sessionHigh)
+        ? round(yahooData.sessionHigh)
+        : null,
+    premarketLow:
+      session === "PRE" && isValidNumber(yahooData?.sessionLow)
+        ? round(yahooData.sessionLow)
+        : null,
+    premarketVolume:
+      session === "PRE" && isValidNumber(yahooData?.sessionVolume)
+        ? Math.round(yahooData.sessionVolume)
+        : null,
+    previousDayHigh: isValidNumber(dailyLevels.previousDayHigh)
+      ? round(dailyLevels.previousDayHigh)
+      : null,
+    previousDayLow: isValidNumber(dailyLevels.previousDayLow)
+      ? round(dailyLevels.previousDayLow)
       : null,
   };
-}
-
-async function getTickerData(
-  ticker: (typeof TICKER_SYMBOLS)[number],
-): Promise<MarketTickerItem> {
-  try {
-    return await requestTickerData(
-      "query1",
-      ticker,
-    );
-  } catch (query1Error) {
-    console.warn(
-      `Yahoo query1 failed for ${ticker.symbol}. Trying query2.`,
-      getErrorMessage(query1Error),
-    );
-
-    try {
-      return await requestTickerData(
-        "query2",
-        ticker,
-      );
-    } catch (query2Error) {
-      const firstMessage =
-        getErrorMessage(query1Error);
-
-      const secondMessage =
-        getErrorMessage(query2Error);
-
-      throw new Error(
-        `${ticker.symbol} failed on both Yahoo hosts. ` +
-          `Query1: ${firstMessage} ` +
-          `Query2: ${secondMessage}`,
-      );
-    }
-  }
 }
 
 export async function GET() {
   try {
     const settledResults = await Promise.allSettled(
-      TICKER_SYMBOLS.map((ticker) =>
-        getTickerData(ticker),
-      ),
+      TICKER_SYMBOLS.map(getTickerData),
     );
-
     const tickerData: MarketTickerItem[] = [];
     const failedSymbols: string[] = [];
 
     settledResults.forEach((result, index) => {
-      const ticker = TICKER_SYMBOLS[index];
-
       if (result.status === "fulfilled") {
         tickerData.push(result.value);
-        return;
+      } else {
+        const symbol = TICKER_SYMBOLS[index].symbol;
+        failedSymbols.push(symbol);
+        console.error(`Market ticker failed for ${symbol}:`, result.reason);
       }
-
-      failedSymbols.push(ticker.symbol);
-
-      console.error(
-        `Market ticker request failed for ${ticker.symbol}:`,
-        result.reason,
-      );
     });
 
-    if (
-      tickerData.length <
-      MINIMUM_REQUIRED_TICKERS
-    ) {
+    if (tickerData.length < MINIMUM_REQUIRED_TICKERS) {
       return NextResponse.json(
         {
           success: false,
           data: [],
           error:
-            `Insufficient ticker data. Received ` +
-            `${tickerData.length} of ${TICKER_SYMBOLS.length} symbols. ` +
-            `At least ${MINIMUM_REQUIRED_TICKERS} are required.`,
-          dataQuality: {
-            status: "unavailable",
-            requestedSymbols:
-              TICKER_SYMBOLS.length,
-            successfulSymbols:
-              tickerData.length,
-            failedSymbols,
-            minimumRequiredSymbols:
-              MINIMUM_REQUIRED_TICKERS,
-            coveragePercent: round(
-              (tickerData.length /
-                TICKER_SYMBOLS.length) *
-                100,
-            ),
-          },
+            `Insufficient ticker data. Received ${tickerData.length} of ` +
+            `${TICKER_SYMBOLS.length} symbols.`,
+          failedSymbols,
           updatedAt: new Date().toISOString(),
         },
         {
           status: 503,
           headers: {
-            "Cache-Control":
-              "no-store, max-age=0",
+            "Cache-Control": "no-store, max-age=0",
           },
         },
       );
     }
 
-    /*
-     * Restore the original display order even though individual
-     * requests may finish in a different order.
-     */
-    const orderedTickerData =
-      TICKER_SYMBOLS.map((ticker) =>
-        tickerData.find(
-          (item) =>
-            item.symbol === ticker.symbol,
-        ),
-      ).filter(
-        (item): item is MarketTickerItem =>
-          Boolean(item),
-      );
-
-    const latestMarketTime =
-      orderedTickerData.reduce<number | null>(
-        (latest, ticker) => {
-          if (
-            ticker.regularMarketTime === null
-          ) {
-            return latest;
-          }
-
-          if (
-            latest === null ||
-            ticker.regularMarketTime > latest
-          ) {
-            return ticker.regularMarketTime;
-          }
-
-          return latest;
-        },
-        null,
-      );
-
-    const marketStates = Array.from(
-      new Set(
-        orderedTickerData.map(
-          (ticker) => ticker.marketState,
-        ),
-      ),
-    );
-
-    const partialData =
-      failedSymbols.length > 0;
+    const orderedData = TICKER_SYMBOLS.map((ticker) =>
+      tickerData.find((item) => item.symbol === ticker.symbol),
+    ).filter((item): item is MarketTickerItem => Boolean(item));
 
     return NextResponse.json(
       {
         success: true,
-        data: orderedTickerData,
+        data: orderedData,
         dataQuality: {
-          status: partialData
-            ? "partial"
-            : "complete",
-          requestedSymbols:
-            TICKER_SYMBOLS.length,
-          successfulSymbols:
-            orderedTickerData.length,
+          status: failedSymbols.length > 0 ? "partial" : "complete",
+          requestedSymbols: TICKER_SYMBOLS.length,
+          successfulSymbols: orderedData.length,
           failedSymbols,
-          minimumRequiredSymbols:
-            MINIMUM_REQUIRED_TICKERS,
           coveragePercent: round(
-            (orderedTickerData.length /
-              TICKER_SYMBOLS.length) *
-              100,
+            (orderedData.length / TICKER_SYMBOLS.length) * 100,
           ),
         },
-        marketStates,
-        latestMarketTime,
-        source: "Yahoo Finance",
+        regularSource: "Finnhub with Yahoo Finance fallback",
+        extendedHoursSource: "Yahoo Finance",
         updatedAt: new Date().toISOString(),
       },
       {
         headers: {
-          "Cache-Control":
-            "public, s-maxage=300, stale-while-revalidate=600",
+          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
         },
       },
     );
   } catch (error) {
-    console.error(
-      "Market ticker route error:",
-      error,
-    );
+    console.error("Market ticker route error:", error);
 
     return NextResponse.json(
       {
@@ -446,8 +589,7 @@ export async function GET() {
       {
         status: 500,
         headers: {
-          "Cache-Control":
-            "no-store, max-age=0",
+          "Cache-Control": "no-store, max-age=0",
         },
       },
     );

@@ -37,10 +37,6 @@ export const metadata: Metadata = {
   creator: "MaicaTrades",
   publisher: "MaicaTrades",
 
-  alternates: {
-    canonical: "/",
-  },
-
   openGraph: {
     type: "website",
     locale: "en_US",

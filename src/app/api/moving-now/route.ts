@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const CACHE_SECONDS = 300;
@@ -34,6 +34,7 @@ const STOCK_UNIVERSE = [
   { symbol: "SOFI", company: "SoFi Technologies, Inc." },
   { symbol: "TSLA", company: "Tesla, Inc." },
   {
+    
     symbol: "TSM",
     company: "Taiwan Semiconductor Manufacturing",
   },

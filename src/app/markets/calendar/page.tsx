@@ -20,6 +20,7 @@ type CalendarEvent = {
   previous: string;
   forecast: string;
   actual: string;
+  status: "Scheduled" | "Awaiting result" | "Completed";
   description: string;
 };
 
@@ -32,13 +33,13 @@ type EconomicCalendarResponse = {
 
 function formatUpdatedTime(value?: string) {
   if (!value) {
-    return "Reviewed weekly";
+    return "Recently";
   }
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return "Reviewed weekly";
+    return "Recently";
   }
 
   return date.toLocaleString("en-US", {
@@ -47,6 +48,48 @@ function formatUpdatedTime(value?: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function formatEventDate(event: CalendarEvent) {
+  /*
+    Event IDs from /api/economic-calendar begin with YYYY-MM-DD.
+
+    Example:
+    2026-09-11-consumer-price-index-cpi
+
+    We use that real calendar date instead of relying only
+    on event.date, which currently contains just "Friday".
+  */
+  const match = event.id.match(
+    /^(\d{4})-(\d{2})-(\d{2})/,
+  );
+
+  if (!match) {
+    return event.date;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  /*
+    Noon UTC prevents the date from accidentally shifting
+    backward or forward when formatted in Eastern Time.
+  */
+  const date = new Date(
+    Date.UTC(year, month - 1, day, 12, 0, 0),
+  );
+
+  if (Number.isNaN(date.getTime())) {
+    return event.date;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(date);
 }
 
 function getImpactStyles(impact: string) {
@@ -104,7 +147,7 @@ export default function CalendarPage() {
       if (!response.ok || !result.success) {
         throw new Error(
           result.error ||
-            "Unable to load this week's market catalysts.",
+            "Unable to load upcoming market catalysts.",
         );
       }
 
@@ -113,7 +156,7 @@ export default function CalendarPage() {
       setError(
         error instanceof Error
           ? error.message
-          : "Unable to load this week's market catalysts.",
+          : "Unable to load upcoming market catalysts.",
       );
     } finally {
       setLoading(false);
@@ -126,6 +169,9 @@ export default function CalendarPage() {
   }, []);
 
   const events = data?.events ?? [];
+  const upcomingEvents = events.filter(
+    (event) => event.status === "Scheduled",
+  );
 
   const highImpactCount = events.filter(
     (event) => event.impact === "High",
@@ -155,18 +201,17 @@ export default function CalendarPage() {
             <div>
               <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-blue-400">
                 <CalendarDays size={15} />
-                Weekly trading calendar
+                Economic calendar
               </div>
 
               <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                This Week&apos;s Market Catalysts
+                Upcoming Market Catalysts
               </h1>
 
               <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
-                Review the major economic releases and Federal
-                Reserve events that may affect volatility,
-                interest-rate expectations, and market direction
-                during the current trading week.
+                Review upcoming major economic releases and
+                Federal Reserve events that may affect volatility,
+                interest-rate expectations, and market direction.
               </p>
             </div>
 
@@ -191,7 +236,7 @@ export default function CalendarPage() {
 
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <Clock3 size={14} />
-                Calendar reviewed{" "}
+                Calendar updated{" "}
                 {formatUpdatedTime(data?.updatedAt)}
               </div>
             </div>
@@ -213,7 +258,7 @@ export default function CalendarPage() {
             />
 
             <p className="mt-4 text-sm text-slate-400">
-              Loading this week&apos;s market catalysts...
+              Loading upcoming market catalysts...
             </p>
           </div>
         ) : (
@@ -221,15 +266,15 @@ export default function CalendarPage() {
             <section className="mt-8 grid gap-4 md:grid-cols-3">
               <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
                 <span className="text-xs font-semibold uppercase tracking-wide text-blue-400">
-                  This Week
+                  Upcoming
                 </span>
 
                 <div className="mt-4 text-3xl font-bold">
-                  {events.length}
+                  {upcomingEvents.length}
                 </div>
 
                 <p className="mt-2 text-sm text-slate-400">
-                  Scheduled market catalysts
+                  Upcoming market catalysts
                 </p>
               </div>
 
@@ -267,11 +312,11 @@ export default function CalendarPage() {
                 <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#09131d]">
                   <div className="border-b border-slate-800 px-5 py-4 sm:px-6">
                     <h2 className="font-semibold">
-                      This Week&apos;s Key Market Catalysts
+                      Current & Upcoming Week
                     </h2>
 
                     <p className="mt-1 text-xs text-slate-500">
-                      {events.length} scheduled{" "}
+                      {events.length} calendar{" "}
                       {events.length === 1
                         ? "event"
                         : "events"}
@@ -280,8 +325,8 @@ export default function CalendarPage() {
 
                   {events.length === 0 ? (
                     <div className="px-6 py-12 text-center text-sm text-slate-500">
-                      No major market catalysts have been added for
-                      this week.
+                      No major upcoming market catalysts are
+                      currently available.
                     </div>
                   ) : (
                     <div className="divide-y divide-slate-800">
@@ -292,7 +337,11 @@ export default function CalendarPage() {
                         return (
                           <article
                             key={event.id}
-                            className="px-5 py-6 sm:px-6"
+                            className={`px-5 py-6 sm:px-6 ${
+                              event.status === "Completed"
+                                ? "opacity-70"
+                                : ""
+                            }`}
                           >
                             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                               <div className="flex min-w-0 gap-4">
@@ -305,12 +354,20 @@ export default function CalendarPage() {
                                 <div className="min-w-0">
                                   <div className="mb-2 flex flex-wrap items-center gap-2 text-xs font-medium text-blue-400">
                                     <CalendarDays size={14} />
-                                    <span>{event.date}</span>
+
+                                    <span>
+                                      {formatEventDate(event)}
+                                    </span>
+
                                     <span className="text-slate-600">
                                       •
                                     </span>
+
                                     <Clock3 size={14} />
-                                    <span>{event.time} ET</span>
+
+                                    <span>
+                                      {event.time} ET
+                                    </span>
                                   </div>
 
                                   <div className="flex flex-wrap items-center gap-3">
@@ -322,6 +379,10 @@ export default function CalendarPage() {
                                       className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${styles.badge}`}
                                     >
                                       {event.impact}
+                                    </span>
+
+                                    <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                      {event.status}
                                     </span>
                                   </div>
 
@@ -433,7 +494,7 @@ export default function CalendarPage() {
 
                 <div className="rounded-2xl border border-slate-800 bg-[#09131d] p-6">
                   <h2 className="font-semibold">
-                    How to Use This Week&apos;s Catalysts
+                    How to Use Upcoming Catalysts
                   </h2>
 
                   <div className="mt-4 space-y-4 text-sm leading-6 text-slate-400">
@@ -451,7 +512,7 @@ export default function CalendarPage() {
                     </p>
 
                     <p>
-                      This weekly calendar provides context, not a
+                      This calendar provides context, not a
                       standalone trading signal. Combine it with
                       trend, market breadth, price structure, and
                       risk management.

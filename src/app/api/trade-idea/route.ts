@@ -1,26 +1,72 @@
 import { NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase";
 
-export const revalidate = 900;
+export const dynamic = "force-dynamic";
 
 const STOCK_UNIVERSE = [
   { symbol: "AAPL", companyName: "Apple Inc.", sectorSymbol: "XLK" },
   { symbol: "AMD", companyName: "Advanced Micro Devices, Inc.", sectorSymbol: "SMH" },
   { symbol: "AMZN", companyName: "Amazon.com, Inc.", sectorSymbol: "XLY" },
+  { symbol: "ABBV", companyName: "AbbVie Inc.", sectorSymbol: "XLV" },
+  { symbol: "AMT", companyName: "American Tower Corporation", sectorSymbol: "XLRE" },
   { symbol: "AVGO", companyName: "Broadcom Inc.", sectorSymbol: "SMH" },
+  { symbol: "BA", companyName: "The Boeing Company", sectorSymbol: "XLI" },
+  { symbol: "BAC", companyName: "Bank of America Corporation", sectorSymbol: "XLF" },
+  { symbol: "BKNG", companyName: "Booking Holdings Inc.", sectorSymbol: "XLY" },
+  { symbol: "CAT", companyName: "Caterpillar Inc.", sectorSymbol: "XLI" },
+  { symbol: "CEG", companyName: "Constellation Energy Corporation", sectorSymbol: "XLU" },
   { symbol: "COIN", companyName: "Coinbase Global, Inc.", sectorSymbol: "XLF" },
+  { symbol: "COP", companyName: "ConocoPhillips", sectorSymbol: "XLE" },
+  { symbol: "COST", companyName: "Costco Wholesale Corporation", sectorSymbol: "XLP" },
+  { symbol: "CRM", companyName: "Salesforce, Inc.", sectorSymbol: "XLK" },
+  { symbol: "CVX", companyName: "Chevron Corporation", sectorSymbol: "XLE" },
+  { symbol: "DIS", companyName: "The Walt Disney Company", sectorSymbol: "XLC" },
+  { symbol: "FCX", companyName: "Freeport-McMoRan Inc.", sectorSymbol: "XLB" },
+  { symbol: "GE", companyName: "GE Aerospace", sectorSymbol: "XLI" },
   { symbol: "GOOGL", companyName: "Alphabet Inc.", sectorSymbol: "XLC" },
+  { symbol: "GS", companyName: "The Goldman Sachs Group, Inc.", sectorSymbol: "XLF" },
+  { symbol: "HD", companyName: "The Home Depot, Inc.", sectorSymbol: "XLY" },
+  { symbol: "JPM", companyName: "JPMorgan Chase & Co.", sectorSymbol: "XLF" },
+  { symbol: "LLY", companyName: "Eli Lilly and Company", sectorSymbol: "XLV" },
+  { symbol: "LOW", companyName: "Lowe's Companies, Inc.", sectorSymbol: "XLY" },
   { symbol: "META", companyName: "Meta Platforms, Inc.", sectorSymbol: "XLC" },
   { symbol: "MSFT", companyName: "Microsoft Corporation", sectorSymbol: "XLK" },
   { symbol: "MU", companyName: "Micron Technology, Inc.", sectorSymbol: "SMH" },
+  { symbol: "NEE", companyName: "NextEra Energy, Inc.", sectorSymbol: "XLU" },
+  { symbol: "NEM", companyName: "Newmont Corporation", sectorSymbol: "XLB" },
   { symbol: "NFLX", companyName: "Netflix, Inc.", sectorSymbol: "XLC" },
   { symbol: "NVDA", companyName: "NVIDIA Corporation", sectorSymbol: "SMH" },
+  { symbol: "NOW", companyName: "ServiceNow, Inc.", sectorSymbol: "XLK" },
+  { symbol: "ORCL", companyName: "Oracle Corporation", sectorSymbol: "XLK" },
   { symbol: "PLTR", companyName: "Palantir Technologies Inc.", sectorSymbol: "XLK" },
+  { symbol: "PLD", companyName: "Prologis, Inc.", sectorSymbol: "XLRE" },
+  { symbol: "QCOM", companyName: "QUALCOMM Incorporated", sectorSymbol: "SMH" },
+  { symbol: "RCL", companyName: "Royal Caribbean Cruises Ltd.", sectorSymbol: "XLY" },
   { symbol: "SMCI", companyName: "Super Micro Computer, Inc.", sectorSymbol: "SMH" },
   { symbol: "SOFI", companyName: "SoFi Technologies, Inc.", sectorSymbol: "XLF" },
   { symbol: "TSLA", companyName: "Tesla, Inc.", sectorSymbol: "XLY" },
+  { symbol: "TSM", companyName: "Taiwan Semiconductor Manufacturing Company Limited", sectorSymbol: "SMH" },
+  { symbol: "UNH", companyName: "UnitedHealth Group Incorporated", sectorSymbol: "XLV" },
+  { symbol: "WMT", companyName: "Walmart Inc.", sectorSymbol: "XLP" },
+  { symbol: "XOM", companyName: "Exxon Mobil Corporation", sectorSymbol: "XLE" },
 ] as const;
 
-const CONTEXT_SYMBOLS = ["SPY", "QQQ", "XLK", "SMH", "XLY", "XLF", "XLC"] as const;
+const CONTEXT_SYMBOLS = [
+  "SPY",
+  "QQQ",
+  "XLK",
+  "SMH",
+  "XLY",
+  "XLF",
+  "XLC",
+  "XLV",
+  "XLI",
+  "XLE",
+  "XLP",
+  "XLB",
+  "XLRE",
+  "XLU",
+] as const;
 const BATCH_SIZE = 5;
 const MINIMUM_ACTIONABLE_SCORE = 62;
 
@@ -33,6 +79,7 @@ type YahooChartResponse = {
       timestamp?: number[];
       indicators?: {
         quote?: Array<{
+          open?: Array<number | null>;
           close?: Array<number | null>;
           high?: Array<number | null>;
           low?: Array<number | null>;
@@ -46,6 +93,7 @@ type YahooChartResponse = {
 
 type PriceRow = {
   timestamp: number;
+  open: number;
   close: number;
   high: number;
   low: number;
@@ -70,6 +118,8 @@ type MarketSeries = {
   sma160SlopePercent: number;
   rsi14: number | null;
   atr14: number | null;
+  averageRange126: number | null;
+  averageRangePercent126: number | null;
   price: number;
   previousClose: number;
   change: number;
@@ -91,6 +141,16 @@ type ScoreBreakdown = {
   availableMaximum: number;
 };
 
+type EntryFramework = "PULLBACK_CONFIRMATION" | "BREAKOUT";
+
+type EntryStructure = {
+  framework: EntryFramework;
+  triggerPrice: number;
+  confirmationRow: PriceRow | null;
+  pullbackLow: number | null;
+  pullbackHigh: number | null;
+};
+
 type TradeLevels = {
   entry: number;
   stopLoss: number;
@@ -100,12 +160,48 @@ type TradeLevels = {
   targetDistancePercent: number;
 };
 
+type QualificationFailure = {
+  code: string;
+  label: string;
+  detail: string;
+};
+
+type WeeklyTradeStatus =
+  | "WAITING_FOR_ENTRY"
+  | "ACTIVE"
+  | "TARGET_HIT"
+  | "STOPPED_OUT"
+  | "EXPIRED"
+  | "NEEDS_REVIEW";
+
+type WeeklyTradeRow = {
+  id: string;
+  week_key: string;
+  symbol: string;
+  direction: Direction;
+  status: WeeklyTradeStatus;
+  entry_price: number | string;
+  stop_price: number | string;
+  target_price: number | string;
+  idea_snapshot: TradeIdea;
+  market_context: Record<string, unknown> | null;
+  locked_at: string;
+  entry_triggered_at: string | null;
+  target_hit_at: string | null;
+  stopped_out_at: string | null;
+  expired_at: string | null;
+  needs_review_at: string | null;
+  outcome_note: string | null;
+  last_checked_at: string | null;
+};
+
 type TradeIdea = {
   symbol: string;
   companyName: string;
   sectorSymbol: string;
   direction: Direction;
   price: number;
+  selectedPrice?: number;
   previousClose: number;
   change: number;
   changePercent: number;
@@ -134,15 +230,35 @@ type TradeIdea = {
   extended: boolean;
   rsi14: number | null;
   atr14: number | null;
+  averageRange126: number | null;
+  averageRangePercent126: number | null;
   recentHigh: number;
   recentLow: number;
   triggerDistancePercent: number;
+  entryFramework?: EntryFramework;
+  confirmationDate?: string | null;
+  confirmationHigh?: number | null;
+  confirmationLow?: number | null;
+  structureInvalidation?: number | null;
   relativeStrength20: number;
   sectorRelativeStrength20: number;
   marketDirection: MarketRegime;
   scoreBreakdown: ScoreBreakdown;
   chart: ChartPoint[];
 };
+
+function buildSeriesChart(series: MarketSeries): ChartPoint[] {
+  return series.rows.slice(-90).map((row, index, slicedRows) => {
+    const originalIndex = series.rows.length - slicedRows.length + index;
+    const sma = series.sma20Series[originalIndex];
+
+    return {
+      date: new Date(row.timestamp * 1000).toISOString().slice(0, 10),
+      close: round(row.close),
+      sma20: sma === null ? null : round(sma),
+    };
+  });
+}
 
 type FetchOptions = RequestInit & { next?: { revalidate?: number } };
 
@@ -156,6 +272,86 @@ function round(value: number, decimals = 2) {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function formatDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getEasternDateParts(now = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(now)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    weekday: parts.weekday,
+    hour: Number(parts.hour),
+  };
+}
+
+function getTradingWeekKey(now = new Date()) {
+  const eastern = getEasternDateParts(now);
+  const localDate = new Date(
+    Date.UTC(eastern.year, eastern.month - 1, eastern.day),
+  );
+
+  const weekdayNumber: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  const weekday = weekdayNumber[eastern.weekday] ?? localDate.getUTCDay();
+
+  if (weekday === 0 && eastern.hour >= 19) {
+    localDate.setUTCDate(localDate.getUTCDate() + 1);
+    return formatDateKey(localDate);
+  }
+
+  const daysSinceMonday = weekday === 0 ? 6 : weekday - 1;
+  localDate.setUTCDate(localDate.getUTCDate() - daysSinceMonday);
+  return formatDateKey(localDate);
+}
+
+function toNumber(value: number | string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function weeklyMetadata(row: WeeklyTradeRow) {
+  return {
+    locked: true,
+    weekKey: row.week_key,
+    lockedAt: row.locked_at,
+    status: row.status,
+    entryTriggeredAt: row.entry_triggered_at,
+    targetHitAt: row.target_hit_at,
+    stoppedOutAt: row.stopped_out_at,
+    expiredAt: row.expired_at,
+    needsReviewAt: row.needs_review_at,
+    outcomeNote: row.outcome_note,
+    lastCheckedAt: row.last_checked_at,
+  };
 }
 
 function calculateSmaSeries(values: number[], period: number) {
@@ -204,12 +400,30 @@ function classifySlope(slopePercent: number) {
 
 function calculateRsi(values: number[], period = 14) {
   if (values.length <= period) return null;
-  const changes = values.slice(1).map((value, index) => value - values[index]);
-  const recent = changes.slice(-period);
-  const gains = recent.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
-  const losses = recent.filter((value) => value < 0).reduce((sum, value) => sum + Math.abs(value), 0);
-  const averageGain = gains / period;
-  const averageLoss = losses / period;
+
+  const changes = values
+    .slice(1)
+    .map((value, index) => value - values[index]);
+
+  let averageGain =
+    changes
+      .slice(0, period)
+      .reduce((sum, change) => sum + Math.max(change, 0), 0) /
+    period;
+
+  let averageLoss =
+    changes
+      .slice(0, period)
+      .reduce((sum, change) => sum + Math.max(-change, 0), 0) /
+    period;
+
+  for (const change of changes.slice(period)) {
+    averageGain =
+      (averageGain * (period - 1) + Math.max(change, 0)) / period;
+    averageLoss =
+      (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+  }
+
   if (averageLoss === 0) return 100;
   return 100 - 100 / (1 + averageGain / averageLoss);
 }
@@ -230,6 +444,26 @@ function calculateAtr(rows: PriceRow[], period = 14) {
   }
   const recent = ranges.slice(-period);
   return recent.reduce((sum, value) => sum + value, 0) / recent.length;
+}
+
+function calculateAverageRange(rows: PriceRow[], period = 126) {
+  if (rows.length <= period) return null;
+
+  const recentRows = rows.slice(-(period + 1));
+  const trueRanges = recentRows.slice(1).map((row, index) => {
+    const previousClose = recentRows[index].close;
+
+    return Math.max(
+      row.high - row.low,
+      Math.abs(row.high - previousClose),
+      Math.abs(row.low - previousClose),
+    );
+  });
+
+  return (
+    trueRanges.reduce((sum, value) => sum + value, 0) /
+    trueRanges.length
+  );
 }
 
 function calculateReturn(closes: number[], sessions: number) {
@@ -283,6 +517,7 @@ async function loadMarketSeries(symbol: string): Promise<MarketSeries> {
   const result = data.chart?.result?.[0];
   const quote = result?.indicators?.quote?.[0];
   const timestamps = result?.timestamp ?? [];
+  const opens = quote?.open ?? [];
   const closes = quote?.close ?? [];
   const highs = quote?.high ?? [];
   const lows = quote?.low ?? [];
@@ -294,6 +529,7 @@ async function loadMarketSeries(symbol: string): Promise<MarketSeries> {
       if (!isValidNumber(close)) return null;
       return {
         timestamp,
+        open: isValidNumber(opens[index]) ? opens[index] : close,
         close,
         high: isValidNumber(highs[index]) ? highs[index] : close,
         low: isValidNumber(lows[index]) ? lows[index] : close,
@@ -313,6 +549,7 @@ async function loadMarketSeries(symbol: string): Promise<MarketSeries> {
   const sma160 = sma160Series.at(-1) ?? null;
   const sma20SlopePercent = calculateSlopePercent(sma20Series, 5);
   const sma160SlopePercent = calculateSlopePercent(sma160Series, 10);
+  const averageRange126 = calculateAverageRange(rows);
 
   return {
     symbol,
@@ -326,11 +563,310 @@ async function loadMarketSeries(symbol: string): Promise<MarketSeries> {
     sma160SlopePercent,
     rsi14: calculateRsi(cleanCloses),
     atr14: calculateAtr(rows),
+    averageRange126,
+    averageRangePercent126:
+      averageRange126 === null
+        ? null
+        : (averageRange126 / price) * 100,
     price,
     previousClose,
     change: price - previousClose,
     changePercent: ((price - previousClose) / previousClose) * 100,
     return20: calculateReturn(cleanCloses, 20),
+  };
+}
+
+
+function rebuildSeriesFromRows(
+  baseSeries: MarketSeries,
+  rows: PriceRow[],
+): MarketSeries {
+  if (rows.length < 175) {
+    return baseSeries;
+  }
+
+  const cleanCloses = rows.map((row) => row.close);
+  const sma20Series = calculateSmaSeries(cleanCloses, 20);
+  const sma160Series = calculateSmaSeries(cleanCloses, 160);
+  const price = cleanCloses.at(-1) as number;
+  const previousClose = cleanCloses.at(-2) as number;
+  const sma20 = sma20Series.at(-1) ?? null;
+  const sma160 = sma160Series.at(-1) ?? null;
+  const averageRange126 = calculateAverageRange(rows);
+
+  return {
+    symbol: baseSeries.symbol,
+    rows,
+    closes: cleanCloses,
+    sma20Series,
+    sma160Series,
+    sma20,
+    sma160,
+    sma20SlopePercent: calculateSlopePercent(sma20Series, 5),
+    sma160SlopePercent: calculateSlopePercent(sma160Series, 10),
+    rsi14: calculateRsi(cleanCloses),
+    atr14: calculateAtr(rows),
+    averageRange126,
+    averageRangePercent126:
+      averageRange126 === null
+        ? null
+        : (averageRange126 / price) * 100,
+    price,
+    previousClose,
+    change: price - previousClose,
+    changePercent: ((price - previousClose) / previousClose) * 100,
+    return20: calculateReturn(cleanCloses, 20),
+  };
+}
+
+async function getWeeklyTrade(weekKey: string) {
+  const { data, error } = await supabaseAdmin
+    .from("trade_ideas_weekly")
+    .select("*")
+    .eq("week_key", weekKey)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Unable to load weekly Trade Idea: ${error.message}`);
+  }
+
+  return (data as WeeklyTradeRow | null) ?? null;
+}
+
+async function getPreviousWeeklyTrade(weekKey: string) {
+  const { data, error } = await supabaseAdmin
+    .from("trade_ideas_weekly")
+    .select("*")
+    .lt("week_key", weekKey)
+    .order("week_key", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Unable to load last week's Trade Idea: ${error.message}`);
+  }
+
+  return (data as WeeklyTradeRow | null) ?? null;
+}
+
+async function updateWeeklyOutcome(
+  weeklyTrade: WeeklyTradeRow,
+  series: MarketSeries,
+) {
+  if (
+    ["TARGET_HIT", "STOPPED_OUT", "EXPIRED", "NEEDS_REVIEW"].includes(
+      weeklyTrade.status,
+    )
+  ) {
+    return weeklyTrade;
+  }
+
+  const lockedAtMs = new Date(weeklyTrade.locked_at).getTime();
+  const relevantRows = series.rows.filter(
+    (row) => row.timestamp * 1000 >= lockedAtMs,
+  );
+
+  const entry = toNumber(weeklyTrade.entry_price);
+  const stop = toNumber(weeklyTrade.stop_price);
+  const target = toNumber(weeklyTrade.target_price);
+  // Rebuild the outcome chronologically from the original lock on every check.
+  // Starting from a stored ACTIVE status would let a pre-entry candle trigger
+  // the stop when older candles are scanned again.
+  let status: WeeklyTradeStatus = "WAITING_FOR_ENTRY";
+  let entryTriggeredAt: string | null = null;
+  let targetHitAt: string | null = null;
+  let stoppedOutAt: string | null = null;
+  let expiredAt: string | null = null;
+  let needsReviewAt: string | null = null;
+  let outcomeNote: string | null = null;
+
+  for (const row of relevantRows) {
+    if (["TARGET_HIT", "STOPPED_OUT", "NEEDS_REVIEW"].includes(status)) {
+      break;
+    }
+
+    const eventTime = new Date(row.timestamp * 1000).toISOString();
+    const entryTouched =
+      weeklyTrade.direction === "LONG"
+        ? row.high >= entry
+        : row.low <= entry;
+    const targetTouched =
+      weeklyTrade.direction === "LONG"
+        ? row.high >= target
+        : row.low <= target;
+    const stopTouched =
+      weeklyTrade.direction === "LONG"
+        ? row.low <= stop
+        : row.high >= stop;
+
+    if (status === "WAITING_FOR_ENTRY") {
+      if (!entryTouched) {
+        if (stopTouched) {
+          // This was never a trade. A pre-entry structural failure invalidates
+          // the setup, but it must not be recorded as a stopped-out trade.
+          // EXPIRED is used because it is already supported by the database
+          // status constraint and keeps stopped_out_at null.
+          status = "EXPIRED";
+          expiredAt = eventTime;
+          outcomeNote =
+            "The setup was invalidated before the published entry was confirmed.";
+        }
+
+        continue;
+      }
+
+      entryTriggeredAt = eventTime;
+
+      if (stopTouched) {
+        status = "NEEDS_REVIEW";
+        needsReviewAt = eventTime;
+        outcomeNote =
+          "Entry and stop were both touched within the same daily candle, so the intraday order cannot be verified.";
+      } else if (targetTouched) {
+        status = "TARGET_HIT";
+        targetHitAt = eventTime;
+        outcomeNote = "Entry and target were reached without the stop being touched.";
+      } else {
+        status = "ACTIVE";
+        outcomeNote = "The published entry was confirmed.";
+      }
+
+      continue;
+    }
+
+    if (status === "ACTIVE") {
+      if (targetTouched && stopTouched) {
+        status = "NEEDS_REVIEW";
+        needsReviewAt = eventTime;
+        outcomeNote =
+          "Target and stop were both touched within the same daily candle, so the intraday order cannot be verified.";
+      } else if (targetTouched) {
+        status = "TARGET_HIT";
+        targetHitAt = eventTime;
+        outcomeNote = "The published target was reached.";
+      } else if (stopTouched) {
+        status = "STOPPED_OUT";
+        stoppedOutAt = eventTime;
+        outcomeNote = "The published stop was reached.";
+      }
+    }
+  }
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("trade_ideas_weekly")
+    .update({
+      status,
+      entry_triggered_at: entryTriggeredAt,
+      target_hit_at: targetHitAt,
+      stopped_out_at: stoppedOutAt,
+      expired_at: expiredAt,
+      needs_review_at: needsReviewAt,
+      outcome_note: outcomeNote,
+      last_checked_at: now,
+      updated_at: now,
+    })
+    .eq("id", weeklyTrade.id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(`Unable to update weekly Trade Idea: ${error.message}`);
+  }
+
+  return data as WeeklyTradeRow;
+}
+
+async function refreshPreviousWeeklyTrade(weekKey: string) {
+  const previous = await getPreviousWeeklyTrade(weekKey);
+
+  if (!previous) {
+    return null;
+  }
+
+  let updated = previous;
+  let series: MarketSeries | null = null;
+
+  const wasAutomaticallyExpired =
+    previous.status === "EXPIRED" &&
+    (previous.outcome_note ===
+      "The entry was not confirmed before the weekly window ended." ||
+      previous.outcome_note ===
+        "The trade remained active when the weekly tracking window ended.");
+
+  const entryTime = previous.entry_triggered_at
+    ? new Date(previous.entry_triggered_at).getTime()
+    : null;
+  const stopTime = previous.stopped_out_at
+    ? new Date(previous.stopped_out_at).getTime()
+    : null;
+  const targetTime = previous.target_hit_at
+    ? new Date(previous.target_hit_at).getTime()
+    : null;
+  const hasImpossibleOutcomeOrder =
+    entryTime !== null &&
+    ((previous.status === "STOPPED_OUT" &&
+      stopTime !== null &&
+      stopTime < entryTime) ||
+      (previous.status === "TARGET_HIT" &&
+        targetTime !== null &&
+        targetTime < entryTime));
+
+  if (wasAutomaticallyExpired || hasImpossibleOutcomeOrder) {
+    const restoredStatus: WeeklyTradeStatus = previous.entry_triggered_at
+      ? "ACTIVE"
+      : "WAITING_FOR_ENTRY";
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from("trade_ideas_weekly")
+      .update({
+        status: restoredStatus,
+        expired_at: null,
+        target_hit_at: null,
+        stopped_out_at: null,
+        needs_review_at: null,
+        outcome_note:
+          restoredStatus === "ACTIVE"
+            ? "The published entry was confirmed. Tracking continues until the target or stop is reached."
+            : "The setup remains open and is still waiting for the published entry.",
+        updated_at: now,
+      })
+      .eq("id", previous.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      throw new Error(`Unable to restore last week's Trade Idea: ${error.message}`);
+    }
+
+    updated = data as WeeklyTradeRow;
+  }
+
+  if (updated.status === "WAITING_FOR_ENTRY" || updated.status === "ACTIVE") {
+    series = await loadMarketSeries(updated.symbol);
+    updated = await updateWeeklyOutcome(updated, series);
+  }
+
+  if (!series) {
+    return {
+      idea: updated.idea_snapshot,
+      ...weeklyMetadata(updated),
+    };
+  }
+
+  const snapshot = updated.idea_snapshot;
+
+  return {
+    idea: {
+      ...snapshot,
+      selectedPrice: snapshot.selectedPrice ?? snapshot.price,
+      price: round(series.price),
+      previousClose: round(series.previousClose),
+      change: round(series.change),
+      changePercent: round(series.changePercent),
+      chart: buildSeriesChart(series),
+    },
+    ...weeklyMetadata(updated),
   };
 }
 
@@ -499,8 +1035,10 @@ function getTrendAlignment(series: MarketSeries, direction: Direction) {
 }
 
 function recentLevels(series: MarketSeries) {
-  const twenty = series.rows.slice(-20);
-  const ten = series.rows.slice(-10);
+  // Exclude the current session so today's move is measured against levels
+  // that existed before the session began.
+  const twenty = series.rows.slice(-21, -1);
+  const ten = series.rows.slice(-11, -1);
   return {
     recentHigh: Math.max(...twenty.map((row) => row.high)),
     recentLow: Math.min(...twenty.map((row) => row.low)),
@@ -546,24 +1084,23 @@ function scoreSectorStrength(direction: Direction, sector: MarketSeries, spy: Ma
   return 0;
 }
 
-function scoreDistanceToLevel(
+function scoreDistanceToTrigger(
   direction: Direction,
   price: number,
-  recentHigh: number,
-  recentLow: number,
+  entry: number,
 ) {
   const distance =
     direction === "LONG"
-      ? ((recentHigh - price) / recentHigh) * 100
-      : ((price - recentLow) / price) * 100;
+      ? ((entry - price) / price) * 100
+      : ((price - entry) / price) * 100;
 
-  // The setup has already moved too far beyond its trigger.
-  // Avoid rewarding trades that may need to be chased.
+  // The setup has already moved too far beyond its planned trigger.
+  // Avoid rewarding trades that would require chasing.
   if (distance < -3) return 0;
   if (distance < -1.5) return 2;
   if (distance < -0.5) return 5;
 
-  // Best setups are sitting directly beneath/above the trigger
+  // Best setups are sitting directly beneath/above the actual planned entry
   // or have only just confirmed through it.
   if (distance <= 1) return 10;
   if (distance <= 2.5) return 8;
@@ -609,31 +1146,227 @@ function scoreMomentum(direction: Direction, rsi: number | null) {
   return 0;
 }
 
-function calculateLevels(series: MarketSeries, direction: Direction, recentHigh: number, recentLow: number, swingHigh: number, swingLow: number): TradeLevels {
+function findEntryStructure(
+  series: MarketSeries,
+  direction: Direction,
+  recentHigh: number,
+  recentLow: number,
+): EntryStructure {
   const atr = series.atr14 ?? series.price * 0.025;
-  const bufferPercent = clamp((atr / series.price) * 0.18, 0.002, 0.005);
+  const bufferPercent = clamp((atr / series.price) * 0.05, 0.0005, 0.0015);
+
+  // We want the latest meaningful pullback/reversal structure, not simply
+  // the highest/lowest price of the last 20 sessions. The final row is
+  // allowed to be the confirmation candle because weekly ideas lock after
+  // Sunday 7 PM ET, when Friday's daily candle is complete.
+  const lookback = series.rows.slice(-10);
+  const globalOffset = series.rows.length - lookback.length;
 
   if (direction === "LONG") {
-    const entry = Math.max(recentHigh * (1 + bufferPercent), series.price * 1.002);
-    const rawStop = Math.max(entry - atr * 1.35, swingLow - atr * 0.15);
+    const candidateIndices: number[] = [];
+
+    for (let index = 1; index < lookback.length; index += 1) {
+      const row = lookback[index];
+      const prior = lookback[index - 1];
+      const range = Math.max(0.01, row.high - row.low);
+      const closeLocation = (row.close - row.low) / range;
+      const bullishBody = row.close > row.open;
+      const improvingClose = row.close > prior.close;
+      const reclaimingPrice = row.high >= prior.high || row.close > prior.high;
+
+      if (
+        bullishBody &&
+        improvingClose &&
+        closeLocation >= 0.6 &&
+        reclaimingPrice
+      ) {
+        candidateIndices.push(index);
+      }
+    }
+
+    for (let scan = candidateIndices.length - 1; scan >= 0; scan -= 1) {
+      const confirmationIndex = candidateIndices[scan];
+      const confirmation = lookback[confirmationIndex];
+
+      // The pullback must occur before or on the confirmation candle and
+      // should contain at least two sessions of structure.
+      const pullbackStart = Math.max(0, confirmationIndex - 5);
+      const pullbackRows = lookback.slice(
+        pullbackStart,
+        confirmationIndex + 1,
+      );
+
+      if (pullbackRows.length < 2) continue;
+
+      const pullbackLow = Math.min(...pullbackRows.map((row) => row.low));
+      const pullbackHigh = Math.max(...pullbackRows.map((row) => row.high));
+      const lowIndex = pullbackRows.findIndex((row) => row.low === pullbackLow);
+      const lowOccurredBeforeOrOnConfirmation =
+        lowIndex >= 0 && lowIndex <= pullbackRows.length - 1;
+
+      const priorHighRows = series.rows.slice(
+        Math.max(0, globalOffset + pullbackStart - 8),
+        globalOffset + pullbackStart,
+      );
+      const priorHigh =
+        priorHighRows.length > 0
+          ? Math.max(...priorHighRows.map((row) => row.high))
+          : recentHigh;
+
+      const meaningfulPullback =
+        lowOccurredBeforeOrOnConfirmation &&
+        priorHigh > 0 &&
+        ((priorHigh - pullbackLow) / priorHigh) * 100 >= 1;
+
+      if (!meaningfulPullback) continue;
+
+      return {
+        framework: "PULLBACK_CONFIRMATION",
+        triggerPrice: confirmation.high * (1 + bufferPercent),
+        confirmationRow: confirmation,
+        pullbackLow,
+        pullbackHigh,
+      };
+    }
+
+    return {
+      framework: "BREAKOUT",
+      triggerPrice: recentHigh * (1 + clamp(bufferPercent * 2, 0.001, 0.003)),
+      confirmationRow: null,
+      pullbackLow: null,
+      pullbackHigh: null,
+    };
+  }
+
+  const candidateIndices: number[] = [];
+
+  for (let index = 1; index < lookback.length; index += 1) {
+    const row = lookback[index];
+    const prior = lookback[index - 1];
+    const range = Math.max(0.01, row.high - row.low);
+    const closeLocation = (row.close - row.low) / range;
+    const bearishBody = row.close < row.open;
+    const weakeningClose = row.close < prior.close;
+    const rejectingPrice = row.low <= prior.low || row.close < prior.low;
+
+    if (
+      bearishBody &&
+      weakeningClose &&
+      closeLocation <= 0.4 &&
+      rejectingPrice
+    ) {
+      candidateIndices.push(index);
+    }
+  }
+
+  for (let scan = candidateIndices.length - 1; scan >= 0; scan -= 1) {
+    const confirmationIndex = candidateIndices[scan];
+    const confirmation = lookback[confirmationIndex];
+    const pullbackStart = Math.max(0, confirmationIndex - 5);
+    const pullbackRows = lookback.slice(
+      pullbackStart,
+      confirmationIndex + 1,
+    );
+
+    if (pullbackRows.length < 2) continue;
+
+    const pullbackLow = Math.min(...pullbackRows.map((row) => row.low));
+    const pullbackHigh = Math.max(...pullbackRows.map((row) => row.high));
+
+    const priorLowRows = series.rows.slice(
+      Math.max(0, globalOffset + pullbackStart - 8),
+      globalOffset + pullbackStart,
+    );
+    const priorLow =
+      priorLowRows.length > 0
+        ? Math.min(...priorLowRows.map((row) => row.low))
+        : recentLow;
+
+    const meaningfulBounce =
+      priorLow > 0 &&
+      ((pullbackHigh - priorLow) / priorLow) * 100 >= 1;
+
+    if (!meaningfulBounce) continue;
+
+    return {
+      framework: "PULLBACK_CONFIRMATION",
+      triggerPrice: confirmation.low * (1 - bufferPercent),
+      confirmationRow: confirmation,
+      pullbackLow,
+      pullbackHigh,
+    };
+  }
+
+  return {
+    framework: "BREAKOUT",
+    triggerPrice: recentLow * (1 - clamp(bufferPercent * 2, 0.001, 0.003)),
+    confirmationRow: null,
+    pullbackLow: null,
+    pullbackHigh: null,
+  };
+}
+
+function calculateLevels(
+  series: MarketSeries,
+  direction: Direction,
+  recentHigh: number,
+  recentLow: number,
+  swingHigh: number,
+  swingLow: number,
+  structure: EntryStructure,
+): TradeLevels {
+  const atr = series.atr14 ?? series.price * 0.025;
+  const sixMonthAverageRange = series.averageRange126 ?? atr;
+  const projectedSwingMove = sixMonthAverageRange * 3;
+
+  if (direction === "LONG") {
+    const entry = structure.triggerPrice;
+
+    // Pullback setups use the actual pullback low as the structural
+    // invalidation. Breakout setups retain the shorter swing-low framework.
+    const structuralLow =
+      structure.framework === "PULLBACK_CONFIRMATION" &&
+      structure.pullbackLow !== null
+        ? structure.pullbackLow
+        : swingLow;
+
+    const rawStop = Math.min(
+      entry - atr * 0.75,
+      structuralLow - atr * 0.1,
+    );
     const stopLoss = clamp(rawStop, entry * 0.94, entry * 0.985);
     const risk = Math.max(0.01, entry - stopLoss);
-    const target = Math.min(entry + risk * 2, entry * 1.12);
+    const target = Math.min(entry + projectedSwingMove, entry * 1.12);
+
     return {
-      entry: round(entry), stopLoss: round(stopLoss), target: round(target),
+      entry: round(entry),
+      stopLoss: round(stopLoss),
+      target: round(target),
       riskReward: round((target - entry) / risk, 2),
       stopDistancePercent: round(((entry - stopLoss) / entry) * 100),
       targetDistancePercent: round(((target - entry) / entry) * 100),
     };
   }
 
-  const entry = Math.min(recentLow * (1 - bufferPercent), series.price * 0.998);
-  const rawStop = Math.min(entry + atr * 1.35, swingHigh + atr * 0.15);
+  const entry = structure.triggerPrice;
+  const structuralHigh =
+    structure.framework === "PULLBACK_CONFIRMATION" &&
+    structure.pullbackHigh !== null
+      ? structure.pullbackHigh
+      : swingHigh;
+
+  const rawStop = Math.max(
+    entry + atr * 0.75,
+    structuralHigh + atr * 0.1,
+  );
   const stopLoss = clamp(rawStop, entry * 1.015, entry * 1.06);
   const risk = Math.max(0.01, stopLoss - entry);
-  const target = Math.max(entry - risk * 2, entry * 0.88);
+  const target = Math.max(entry - projectedSwingMove, entry * 0.88);
+
   return {
-    entry: round(entry), stopLoss: round(stopLoss), target: round(target),
+    entry: round(entry),
+    stopLoss: round(stopLoss),
+    target: round(target),
     riskReward: round((entry - target) / risk, 2),
     stopDistancePercent: round(((stopLoss - entry) / entry) * 100),
     targetDistancePercent: round(((entry - target) / entry) * 100),
@@ -659,12 +1392,30 @@ function buildCandidate(
   direction: Direction,
 ): TradeIdea {
   const { recentHigh, recentLow, swingHigh, swingLow } = recentLevels(series);
-  const levels = calculateLevels(series, direction, recentHigh, recentLow, swingHigh, swingLow);
+  const structure = findEntryStructure(
+    series,
+    direction,
+    recentHigh,
+    recentLow,
+  );
+  const levels = calculateLevels(
+    series,
+    direction,
+    recentHigh,
+    recentLow,
+    swingHigh,
+    swingLow,
+    structure,
+  );
   const trend = scoreTrend(series, direction);
   const marketDirection = scoreMarketDirection(direction, regime);
   const priceAction = scorePriceAction(series, direction, recentHigh, recentLow);
   const sectorStrength = scoreSectorStrength(direction, sector, spy);
-  const distanceToLevel = scoreDistanceToLevel(direction, series.price, recentHigh, recentLow);
+  const distanceToLevel = scoreDistanceToTrigger(
+    direction,
+    series.price,
+    levels.entry,
+  );
   const riskReward = scoreRiskReward(levels.riskReward);
   const relativeStrength = scoreRelativeStrength(direction, series.return20, spy.return20, qqq.return20);
   const momentum = scoreMomentum(direction, series.rsi14);
@@ -674,10 +1425,14 @@ function buildCandidate(
   const relativeStrength20 = series.return20 - benchmarkReturn;
   const sectorRelativeStrength20 = sector.return20 - spy.return20;
   const triggerDistancePercent = direction === "LONG"
-    ? ((recentHigh - series.price) / recentHigh) * 100
-    : ((series.price - recentLow) / series.price) * 100;
+    ? ((levels.entry - series.price) / series.price) * 100
+    : ((series.price - levels.entry) / series.price) * 100;
   const extension = getExtensionMetrics(series, direction);
   const trendAlignment = getTrendAlignment(series, direction);
+  const lastRow = series.rows.at(-1) as PriceRow;
+  const priorRow = series.rows.at(-2) as PriceRow;
+  const currentSma20 = series.sma20;
+  const priorSma20 = series.sma20Series.at(-2) ?? null;
 
   let adjustedTotal = total;
 
@@ -701,29 +1456,54 @@ function buildCandidate(
 
   adjustedTotal = Math.max(0, adjustedTotal);
 
-  const setup = direction === "LONG"
-    ? triggerDistancePercent <= 2 ? "Bullish Breakout" : series.price > (series.sma20 ?? series.price) ? "Trend Continuation" : "Bullish Reclaim"
-    : triggerDistancePercent <= 2 ? "Bearish Breakdown" : series.price < (series.sma20 ?? series.price) ? "Bear Flag Continuation" : "Failed Reclaim";
+  const confirmedBreakout =
+    direction === "LONG"
+      ? lastRow.close > recentHigh
+      : lastRow.close < recentLow;
 
-  const chart: ChartPoint[] = series.rows
-    .slice(-90)
-    .map((row, index, slicedRows) => {
-      const originalIndex =
-        series.rows.length - slicedRows.length + index;
-      const sma = series.sma20Series[originalIndex];
+  const reclaimed20Sma =
+    currentSma20 !== null &&
+    priorSma20 !== null &&
+    (direction === "LONG"
+      ? priorRow.close <= priorSma20 && lastRow.close > currentSma20
+      : priorRow.close >= priorSma20 && lastRow.close < currentSma20);
 
-      return {
-        date: new Date(row.timestamp * 1000)
-          .toISOString()
-          .slice(0, 10),
-        close: round(row.close),
-        sma20: sma === null ? null : round(sma),
-      };
-    });
+  const setup =
+    structure.framework === "PULLBACK_CONFIRMATION"
+      ? direction === "LONG"
+        ? "Trend Continuation"
+        : "Bear Flag Continuation"
+      : confirmedBreakout
+        ? direction === "LONG"
+          ? "Confirmed Breakout"
+          : "Confirmed Breakdown"
+        : triggerDistancePercent >= 0 && triggerDistancePercent <= 2
+          ? direction === "LONG"
+            ? "Breakout Watch"
+            : "Breakdown Watch"
+          : reclaimed20Sma
+            ? direction === "LONG"
+              ? "Bullish 20 SMA Reclaim"
+              : "Bearish 20 SMA Rejection"
+            : direction === "LONG"
+              ? "Trend Continuation"
+              : "Bear Flag Continuation";
 
-  const directionalWord = direction === "LONG" ? "above resistance" : "below support";
-  const invalidationWord = direction === "LONG" ? "below support" : "above resistance";
-  const marketAligned = (direction === "LONG" && regime === "Bullish") || (direction === "SHORT" && regime === "Bearish");
+  const chart = buildSeriesChart(series);
+
+  const directionalWord =
+    structure.framework === "PULLBACK_CONFIRMATION"
+      ? direction === "LONG"
+        ? "above the confirmation candle high"
+        : "below the confirmation candle low"
+      : direction === "LONG"
+        ? "above resistance"
+        : "below support";
+  const invalidationWord =
+    direction === "LONG" ? "below the pullback structure" : "above the pullback structure";
+  const marketAligned =
+    (direction === "LONG" && regime === "Bullish") ||
+    (direction === "SHORT" && regime === "Bearish");
 
   return {
     symbol: stock.symbol,
@@ -745,7 +1525,10 @@ function buildCandidate(
     confidenceStars: Math.max(1, Math.min(5, Math.round((adjustedTotal / 96) * 5))),
     grade: gradeFor(adjustedTotal),
     tradeBias: direction === "LONG" ? "Bullish" : "Bearish",
-    patternDescription: `${stock.symbol} has the strongest ${direction.toLowerCase()}-side combination of trend, price action, level proximity, and risk structure found by the current scan. Confirmation ${directionalWord} is still required.`,
+    patternDescription:
+      structure.framework === "PULLBACK_CONFIRMATION"
+        ? `${stock.symbol} is in a ${direction.toLowerCase()} trend-continuation structure after a pullback. The planned entry is a break ${directionalWord}, rather than a break of the prior 20-session extreme.`
+        : `${stock.symbol} has the strongest ${direction.toLowerCase()}-side combination of trend, price action, level proximity, and risk structure found by the current scan. Confirmation ${directionalWord} is still required.`,
     biasDescription: marketAligned
       ? `The ${direction.toLowerCase()} setup is aligned with the current ${regime.toLowerCase()} SPY/QQQ market regime.`
       : `This setup is not fully aligned with the current ${regime.toLowerCase()} market regime, so additional confirmation is required.`,
@@ -782,9 +1565,39 @@ function buildCandidate(
     extended: extension.extended,
     rsi14: series.rsi14 === null ? null : round(series.rsi14),
     atr14: series.atr14 === null ? null : round(series.atr14),
+    averageRange126:
+      series.averageRange126 === null
+        ? null
+        : round(series.averageRange126),
+    averageRangePercent126:
+      series.averageRangePercent126 === null
+        ? null
+        : round(series.averageRangePercent126),
     recentHigh: round(recentHigh),
     recentLow: round(recentLow),
     triggerDistancePercent: round(triggerDistancePercent),
+    entryFramework: structure.framework,
+    confirmationDate: structure.confirmationRow
+      ? new Date(structure.confirmationRow.timestamp * 1000)
+          .toISOString()
+          .slice(0, 10)
+      : null,
+    confirmationHigh:
+      structure.confirmationRow === null
+        ? null
+        : round(structure.confirmationRow.high),
+    confirmationLow:
+      structure.confirmationRow === null
+        ? null
+        : round(structure.confirmationRow.low),
+    structureInvalidation:
+      direction === "LONG"
+        ? structure.pullbackLow === null
+          ? round(swingLow)
+          : round(structure.pullbackLow)
+        : structure.pullbackHigh === null
+          ? round(swingHigh)
+          : round(structure.pullbackHigh),
     relativeStrength20: round(relativeStrength20),
     sectorRelativeStrength20: round(sectorRelativeStrength20),
     marketDirection: regime,
@@ -796,7 +1609,11 @@ function buildCandidate(
   };
 }
 
-function isActionable(idea: TradeIdea) {
+function getQualificationFailures(
+  idea: TradeIdea,
+): QualificationFailure[] {
+  const failures: QualificationFailure[] = [];
+
   const longTrendRejected =
     idea.direction === "LONG" &&
     (
@@ -827,17 +1644,75 @@ function isActionable(idea: TradeIdea) {
 
   const neutralMarket = idea.marketDirection === "Neutral";
 
-  return (
-    idea.confidenceScore >= MINIMUM_ACTIONABLE_SCORE &&
-    idea.riskReward >= 1.8 &&
-    idea.scoreBreakdown.trend >= 11 &&
-    idea.scoreBreakdown.priceAction >= 8 &&
-    triggerIsReasonablyClose &&
-    (marketAligned || neutralMarket) &&
-    !idea.extended &&
-    !longTrendRejected &&
-    !shortTrendRejected
-  );
+  if (idea.confidenceScore < MINIMUM_ACTIONABLE_SCORE) {
+    failures.push({
+      code: "score",
+      label: "Score Below Minimum",
+      detail: `${idea.confidenceScore}/96 is below the required ${MINIMUM_ACTIONABLE_SCORE}/96 scanner score.`,
+    });
+  }
+
+  if (idea.riskReward < 1.8) {
+    failures.push({
+      code: "risk_reward",
+      label: "Risk/Reward Below Minimum",
+      detail: `${idea.riskReward.toFixed(2)}R is below the required 1.80R.`,
+    });
+  }
+
+  if (idea.scoreBreakdown.trend < 11) {
+    failures.push({
+      code: "trend",
+      label: "Trend Score Below Minimum",
+      detail: `${idea.scoreBreakdown.trend} trend points is below the required 11.`,
+    });
+  }
+
+  if (idea.scoreBreakdown.priceAction < 8) {
+    failures.push({
+      code: "price_action",
+      label: "Price Action Below Minimum",
+      detail: `${idea.scoreBreakdown.priceAction} price-action points is below the required 8.`,
+    });
+  }
+
+  if (!triggerIsReasonablyClose) {
+    failures.push({
+      code: "trigger_distance",
+      label: "Entry Trigger Too Far Away",
+      detail: `The planned entry is ${idea.triggerDistancePercent.toFixed(2)}% away; qualified setups must be no more than 6% away.`,
+    });
+  }
+
+  if (!marketAligned && !neutralMarket) {
+    failures.push({
+      code: "market_alignment",
+      label: "Not Aligned With Market",
+      detail: `The ${idea.direction.toLowerCase()} candidate conflicts with the ${idea.marketDirection.toLowerCase()} SPY/QQQ regime.`,
+    });
+  }
+
+  if (idea.extended) {
+    failures.push({
+      code: "extension",
+      label: "Price Too Extended",
+      detail: "Price is more than 8% or 2 ATR from the 20 SMA.",
+    });
+  }
+
+  if (longTrendRejected || shortTrendRejected) {
+    failures.push({
+      code: "long_term_trend",
+      label: "Long-Term Trend Conflict",
+      detail: `The 160 SMA slope conflicts with the proposed ${idea.direction.toLowerCase()} direction.`,
+    });
+  }
+
+  return failures;
+}
+
+function isActionable(idea: TradeIdea) {
+  return getQualificationFailures(idea).length === 0;
 }
 
 function rankIdeas(ideas: TradeIdea[]) {
@@ -881,8 +1756,313 @@ function rankIdeas(ideas: TradeIdea[]) {
   });
 }
 
+async function lockWeeklyTrade(
+  weekKey: string,
+  idea: TradeIdea,
+  marketContext: Record<string, unknown>,
+) {
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("trade_ideas_weekly")
+    .insert({
+      week_key: weekKey,
+      symbol: idea.symbol,
+      company_name: idea.companyName,
+      direction: idea.direction,
+      setup: idea.setup,
+      status: "WAITING_FOR_ENTRY",
+      selected_price: idea.price,
+      entry_price: idea.entry,
+      stop_price: idea.stopLoss,
+      target_price: idea.target,
+      risk_reward: idea.riskReward,
+      confidence_score: idea.confidenceScore,
+      grade: idea.grade,
+      market_direction: idea.marketDirection,
+      idea_snapshot: idea,
+      market_context: marketContext,
+      locked_at: now,
+      last_checked_at: now,
+      created_at: now,
+      updated_at: now,
+    })
+    .select("*")
+    .maybeSingle();
+
+  if (error && error.code !== "23505") {
+    throw new Error(`Unable to lock weekly Trade Idea: ${error.message}`);
+  }
+
+  if (data) {
+    return data as WeeklyTradeRow;
+  }
+
+  const existing = await getWeeklyTrade(weekKey);
+  if (!existing) {
+    throw new Error("The weekly Trade Idea could not be locked or reloaded.");
+  }
+
+  return existing;
+}
+
+
+async function upgradeLegacyWeeklyEntry(
+  weeklyTrade: WeeklyTradeRow,
+  liveSeries: MarketSeries,
+) {
+  const snapshot = weeklyTrade.idea_snapshot;
+
+  // New weekly ideas already carry the structural-entry framework.
+  if (snapshot.entryFramework) {
+    return weeklyTrade;
+  }
+
+  // Never rewrite a trade whose old published entry was actually triggered.
+  if (weeklyTrade.entry_triggered_at) {
+    return weeklyTrade;
+  }
+
+  const legacyPreEntryTerminal =
+    weeklyTrade.status === "STOPPED_OUT" &&
+    weeklyTrade.entry_triggered_at === null;
+
+  const eligible =
+    weeklyTrade.status === "WAITING_FOR_ENTRY" ||
+    legacyPreEntryTerminal;
+
+  if (!eligible) {
+    return weeklyTrade;
+  }
+
+  const lockedAtMs = new Date(weeklyTrade.locked_at).getTime();
+  const rowsAtLock = liveSeries.rows.filter(
+    (row) => row.timestamp * 1000 < lockedAtMs,
+  );
+
+  if (rowsAtLock.length < 175) {
+    return weeklyTrade;
+  }
+
+  const seriesAtLock = rebuildSeriesFromRows(liveSeries, rowsAtLock);
+  const { recentHigh, recentLow, swingHigh, swingLow } =
+    recentLevels(seriesAtLock);
+  const structure = findEntryStructure(
+    seriesAtLock,
+    weeklyTrade.direction,
+    recentHigh,
+    recentLow,
+  );
+
+  // If the historical chart did not contain a qualifying pullback
+  // confirmation, keep the originally published breakout framework.
+  if (structure.framework !== "PULLBACK_CONFIRMATION") {
+    return weeklyTrade;
+  }
+
+  const levels = calculateLevels(
+    seriesAtLock,
+    weeklyTrade.direction,
+    recentHigh,
+    recentLow,
+    swingHigh,
+    swingLow,
+    structure,
+  );
+
+  const triggerDistancePercent =
+    weeklyTrade.direction === "LONG"
+      ? ((levels.entry - seriesAtLock.price) / seriesAtLock.price) * 100
+      : ((seriesAtLock.price - levels.entry) / seriesAtLock.price) * 100;
+
+  const oldBreakdown = snapshot.scoreBreakdown;
+  const newRiskRewardScore = scoreRiskReward(levels.riskReward);
+  const newDistanceScore = scoreDistanceToTrigger(
+    weeklyTrade.direction,
+    seriesAtLock.price,
+    levels.entry,
+  );
+  const newTotal = Math.max(
+    0,
+    oldBreakdown.total -
+      oldBreakdown.riskReward -
+      oldBreakdown.distanceToLevel +
+      newRiskRewardScore +
+      newDistanceScore,
+  );
+
+  const confirmationDate = structure.confirmationRow
+    ? new Date(structure.confirmationRow.timestamp * 1000)
+        .toISOString()
+        .slice(0, 10)
+    : null;
+
+  const directionWord =
+    weeklyTrade.direction === "LONG"
+      ? "above the confirmation candle high"
+      : "below the confirmation candle low";
+  const invalidationWord =
+    weeklyTrade.direction === "LONG"
+      ? "below the pullback structure"
+      : "above the pullback structure";
+
+  const upgradedSnapshot: TradeIdea = {
+    ...snapshot,
+    setup:
+      weeklyTrade.direction === "LONG"
+        ? "Trend Continuation"
+        : "Bear Flag Continuation",
+    entry: levels.entry,
+    stopLoss: levels.stopLoss,
+    target: levels.target,
+    riskReward: levels.riskReward,
+    triggerDistancePercent: round(triggerDistancePercent),
+    entryFramework: structure.framework,
+    confirmationDate,
+    confirmationHigh:
+      structure.confirmationRow === null
+        ? null
+        : round(structure.confirmationRow.high),
+    confirmationLow:
+      structure.confirmationRow === null
+        ? null
+        : round(structure.confirmationRow.low),
+    structureInvalidation:
+      weeklyTrade.direction === "LONG"
+        ? structure.pullbackLow === null
+          ? round(swingLow)
+          : round(structure.pullbackLow)
+        : structure.pullbackHigh === null
+          ? round(swingHigh)
+          : round(structure.pullbackHigh),
+    confidenceScore: newTotal,
+    confidenceStars: Math.max(
+      1,
+      Math.min(5, Math.round((newTotal / 96) * 5)),
+    ),
+    grade: gradeFor(newTotal),
+    patternDescription:
+      `${snapshot.symbol} is in a ${weeklyTrade.direction.toLowerCase()} trend-continuation structure after a pullback. ` +
+      `The planned entry is a break ${directionWord}, rather than a break of the prior 20-session extreme.`,
+    whyItMatters: [
+      `${snapshot.symbol} scored ${newTotal} out of 96 available points after the structural-entry recalculation and received a ${gradeFor(newTotal)} grade.`,
+      `The trigger is approximately ${round(Math.max(0, triggerDistancePercent), 1)}% away from the selection price. The entry is based on the confirmation candle that followed the pullback.`,
+      `${snapshot.sectorSymbol} differs from SPY by ${round(snapshot.sectorRelativeStrength20, 1)} percentage points over 20 sessions. The planned stop sits ${levels.stopDistancePercent}% from entry with an initial ${levels.riskReward.toFixed(2)}-to-1 reward-to-risk target.`,
+      snapshot.trendAlignment,
+      snapshot.extended
+        ? `Extension warning: price was ${round(snapshot.extensionPercent ?? 0, 1)}% from the 20 SMA at selection.`
+        : "Price was not excessively extended from the 20 SMA under the current filter.",
+    ],
+    managementPlan: [
+      `Wait for a confirmed move ${directionWord} at ${levels.entry.toFixed(2)} rather than anticipating the trigger.`,
+      `Use ${levels.stopLoss.toFixed(2)} as the initial invalidation level ${invalidationWord}, and calculate position size from the defined per-share risk.`,
+      `Consider taking partial profits near ${levels.target.toFixed(2)} or reducing risk if price fails to follow through after entry.`,
+      "Continue monitoring the 20 SMA and 160 SMA slopes for trend deterioration after entry.",
+    ],
+    scoreBreakdown: {
+      ...oldBreakdown,
+      distanceToLevel: newDistanceScore,
+      riskReward: newRiskRewardScore,
+      total: newTotal,
+    },
+  };
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("trade_ideas_weekly")
+    .update({
+      setup: upgradedSnapshot.setup,
+      status: "WAITING_FOR_ENTRY",
+      entry_price: levels.entry,
+      stop_price: levels.stopLoss,
+      target_price: levels.target,
+      risk_reward: levels.riskReward,
+      confidence_score: newTotal,
+      grade: upgradedSnapshot.grade,
+      idea_snapshot: upgradedSnapshot,
+      entry_triggered_at: null,
+      target_hit_at: null,
+      stopped_out_at: null,
+      expired_at: null,
+      needs_review_at: null,
+      outcome_note:
+        "Entry methodology upgraded to the pullback confirmation-candle framework.",
+      last_checked_at: now,
+      updated_at: now,
+    })
+    .eq("id", weeklyTrade.id)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(
+      `Unable to upgrade weekly Trade Idea entry framework: ${error.message}`,
+    );
+  }
+
+  return data as WeeklyTradeRow;
+}
+
 export async function GET() {
   try {
+    const weekKey = getTradingWeekKey();
+    const existingWeeklyTrade = await getWeeklyTrade(weekKey);
+
+    if (existingWeeklyTrade) {
+      const lockedSeries = await loadMarketSeries(existingWeeklyTrade.symbol);
+      const upgradedWeeklyTrade = await upgradeLegacyWeeklyEntry(
+        existingWeeklyTrade,
+        lockedSeries,
+      );
+      const updatedWeeklyTrade = await updateWeeklyOutcome(
+        upgradedWeeklyTrade,
+        lockedSeries,
+      );
+      const previousWeekly = await refreshPreviousWeeklyTrade(weekKey);
+      const lockedSnapshot = updatedWeeklyTrade.idea_snapshot;
+      const liveIdea: TradeIdea = {
+        ...lockedSnapshot,
+        selectedPrice: lockedSnapshot.selectedPrice ?? lockedSnapshot.price,
+        price: round(lockedSeries.price),
+        previousClose: round(lockedSeries.previousClose),
+        change: round(lockedSeries.change),
+        changePercent: round(lockedSeries.changePercent),
+        chart: buildSeriesChart(lockedSeries),
+      };
+
+      const isOpenWeeklyTrade = [
+        "WAITING_FOR_ENTRY",
+        "ACTIVE",
+        "NEEDS_REVIEW",
+      ].includes(updatedWeeklyTrade.status);
+
+      return NextResponse.json({
+        success: true,
+        hasQualifiedSetup: true,
+        hasActiveTradeIdea: isOpenWeeklyTrade,
+        idea: {
+          ...liveIdea,
+          qualificationFailures: [],
+        },
+        rankings: [],
+        marketContext: updatedWeeklyTrade.market_context,
+        scan: {
+          locked: true,
+          message:
+            isOpenWeeklyTrade
+              ? "The scanner is serving this week's locked Trade Idea. Live rankings are not recalculated while an idea is locked."
+              : "This week's locked Trade Idea has reached a terminal outcome and is retained as the weekly record.",
+        },
+        weekly: weeklyMetadata(updatedWeeklyTrade),
+        previousWeekly,
+        methodology: {
+          version: "MaicaTrades structural-entry model 4.4",
+          weeklyLock:
+            "The first qualified setup after Sunday 7 PM ET is locked through the weekly window.",
+        },
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     const symbols = Array.from(new Set([...STOCK_UNIVERSE.map((stock) => stock.symbol), ...CONTEXT_SYMBOLS]));
     const { map, failures } = await loadSeriesMap(symbols);
     const spy = map.get("SPY");
@@ -924,33 +2104,82 @@ export async function GET() {
       actionable: isActionable(idea),
     }));
 
+    const marketContext = {
+      direction: marketRegime,
+      spy: {
+        price: round(spy.price),
+        changePercent: round(spy.changePercent),
+        return20: round(spy.return20),
+      },
+      qqq: {
+        price: round(qqq.price),
+        changePercent: round(qqq.changePercent),
+        return20: round(qqq.return20),
+      },
+    };
+
+    const scan = {
+      universeSize: STOCK_UNIVERSE.length,
+      candidatesEvaluated: candidates.length,
+      actionableCandidates: actionable.length,
+      actionableLongs: actionable.filter((idea) => idea.direction === "LONG").length,
+      actionableShorts: actionable.filter((idea) => idea.direction === "SHORT").length,
+      failedSymbols: failures.length,
+      failures,
+    };
+
+    let weeklyTrade: WeeklyTradeRow | null = null;
+
+    if (hasQualifiedSetup) {
+      weeklyTrade = await lockWeeklyTrade(
+        weekKey,
+        selectedIdea,
+        {
+          ...marketContext,
+          scanAtLock: scan,
+        },
+      );
+    }
+
+    const previousWeekly = await refreshPreviousWeeklyTrade(weekKey);
+
     return NextResponse.json({
       success: true,
       hasQualifiedSetup,
-      idea: selectedIdea,
+      idea: {
+        ...(weeklyTrade?.idea_snapshot ?? selectedIdea),
+        qualificationFailures:
+          weeklyTrade
+            ? []
+            : getQualificationFailures(selectedIdea),
+      },
       rankings,
-      marketContext: {
-        direction: marketRegime,
-        spy: { price: round(spy.price), changePercent: round(spy.changePercent), return20: round(spy.return20) },
-        qqq: { price: round(qqq.price), changePercent: round(qqq.changePercent), return20: round(qqq.return20) },
-      },
-      scan: {
-        universeSize: STOCK_UNIVERSE.length,
-        candidatesEvaluated: candidates.length,
-        actionableCandidates: actionable.length,
-        actionableLongs: actionable.filter((idea) => idea.direction === "LONG").length,
-        actionableShorts: actionable.filter((idea) => idea.direction === "SHORT").length,
-        failedSymbols: failures.length,
-        failures,
-      },
+      marketContext,
+      scan,
+      weekly: weeklyTrade
+        ? weeklyMetadata(weeklyTrade)
+        : {
+            locked: false,
+            weekKey,
+            status: null,
+          },
+      previousWeekly,
       methodology: {
-        version: "MaicaTrades adaptive long-short model 4.0",
+        version: "MaicaTrades structural-entry model 4.4",
         availableMaximum: 96,
         minimumActionableScore: MINIMUM_ACTIONABLE_SCORE,
         movingAverageFramework:
           "20 SMA slope over 5 sessions and 160 SMA slope over 10 sessions",
         extensionFilter:
           "Rejects actionable setups more than 8% or 2 ATR from the 20 SMA",
+        levelFramework:
+          "Trend-continuation entries use the high/low of a qualifying pullback confirmation candle; breakout setups continue to use prior 20-session resistance/support.",
+        targetFramework:
+          "Initial target uses three times the 126-session average true range, capped at 12% from entry; setups below 1.8-to-1 are rejected",
+        momentumFramework:
+          "14-session RSI using Wilder smoothing",
+        weeklyLock:
+          "The first qualified setup after Sunday 7 PM ET is locked through the weekly window.",
         earningsNewsFilter: "Reserved for the next update",
         updateFrequency: "Approximately every 15 minutes",
       },

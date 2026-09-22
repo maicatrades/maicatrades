@@ -6,7 +6,25 @@ import {
   PlaySquare,
   Users,
 } from "lucide-react";
+import type { Metadata } from "next";
+export const metadata: Metadata = {
+  title: "Swing Trading Community | MaicaTrades",
 
+  description:
+    "Join the growing MaicaTrades swing trading community for market discussions, trading education, weekly plans, trade reviews, and practical market analysis.",
+
+  alternates: {
+    canonical: "/community",
+  },
+
+  openGraph: {
+    title: "Swing Trading Community | MaicaTrades",
+    description:
+      "Connect with the MaicaTrades community through market discussions, trading education, weekly plans, trade reviews, and swing trading analysis.",
+    url: "/community",
+    type: "website",
+  },
+};
 export default function CommunityPage() {
   return (
     <main className="min-h-screen bg-[#050b12] text-white">

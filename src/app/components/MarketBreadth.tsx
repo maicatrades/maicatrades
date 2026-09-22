@@ -340,42 +340,49 @@ function MiniChart({
 function BreadthGauge({
   score,
   label,
+  trend,
 }: {
   score: number;
   label: string;
+  trend: MarketBreadthResponse["trend"];
 }) {
   const normalizedScore = clamp(score);
   const theme = getBreadthTheme(normalizedScore);
 
   return (
-    <div className="relative mx-auto h-44 w-36">
-      <div
-        className="absolute left-0 top-0 h-36 w-36 rounded-full"
-        style={{
-          background: `conic-gradient(
-            ${theme.gauge} 0deg,
-            ${theme.gauge} ${normalizedScore * 3.6}deg,
-            #1e293b ${normalizedScore * 3.6}deg,
-            #1e293b 360deg
-          )`,
-        }}
-      />
+    <div className="mx-auto flex w-40 flex-col items-center text-center">
+      <div className="relative h-36 w-36">
+        <div
+          className="absolute inset-0 rounded-full"
+          style={{
+            background: `conic-gradient(
+              ${theme.gauge} 0deg,
+              ${theme.gauge} ${normalizedScore * 3.6}deg,
+              #1e293b ${normalizedScore * 3.6}deg,
+              #1e293b 360deg
+            )`,
+          }}
+        />
 
-      <div className="absolute left-[11px] top-[11px] flex h-[122px] w-[122px] flex-col items-center justify-center rounded-full bg-[#09131d] text-center">
-        <span className="text-3xl font-bold text-white">
-          {formatNumber(normalizedScore)}
-        </span>
+        <div className="absolute inset-[11px] flex flex-col items-center justify-center rounded-full bg-[#09131d]">
+          <span className="text-3xl font-bold text-white">
+            {formatNumber(normalizedScore)}
+          </span>
 
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          out of 100
-        </span>
-
+          <span className="mt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            Breadth Score
+          </span>
+        </div>
       </div>
 
       <span
-        className={`absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold ${theme.border} ${theme.background} ${theme.text}`}
+        className={`mt-3 whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${theme.border} ${theme.background} ${theme.text}`}
       >
         {label}
+      </span>
+
+      <span className="mt-1.5 text-[10px] leading-4 text-slate-500">
+        {formatTrendComparison(trend).replace(" points", "")}
       </span>
     </div>
   );
@@ -597,6 +604,7 @@ export default function MarketBreadth() {
             <BreadthGauge
               score={data.breadthScore}
               label={data.label}
+              trend={data.trend}
             />
 
             <div className="space-y-2">
@@ -649,7 +657,7 @@ export default function MarketBreadth() {
             />
 
             <Metric
-              label="Sectors"
+              label="Broad Sectors"
               value={`${data.sectors.positive}/${data.sectors.total}`}
             />
           </div>

@@ -7,6 +7,7 @@ type CalendarEvent = {
   time: string;
   title: string;
   impact: string;
+  status?: "Scheduled" | "Awaiting result" | "Completed";
 };
 
 type EconomicCalendarProps = {
@@ -60,6 +61,7 @@ export default function EconomicCalendar({
   events,
 }: EconomicCalendarProps) {
   const dashboardEvents = [...events]
+    .filter((event) => event.status !== "Completed" && event.status !== "Awaiting result")
     .sort(
       (firstEvent, secondEvent) =>
         getImpactPriority(firstEvent.impact) -

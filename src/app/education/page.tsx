@@ -8,7 +8,25 @@ import {
   ShieldCheck,
   TrendingUp,
 } from "lucide-react";
+import type { Metadata } from "next";
+export const metadata: Metadata = {
+  title: "Swing Trading Education | Learn Trading Fundamentals",
 
+  description:
+    "Learn swing trading fundamentals with MaicaTrades, including trend analysis, risk management, market breadth, position sizing, and swing trade setups.",
+
+  alternates: {
+    canonical: "/education",
+  },
+
+  openGraph: {
+    title: "Swing Trading Education | MaicaTrades",
+    description:
+      "Learn practical swing trading concepts including trend analysis, risk management, market breadth, position sizing, and trading setups.",
+    url: "/education",
+    type: "website",
+  },
+};
 const lessons = [
   {
     title: "Trend Analysis",

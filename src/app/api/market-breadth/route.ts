@@ -9,6 +9,9 @@ import { supabaseAdmin } from "@/lib/supabase";
 export const revalidate = 1800;
 
 const MINIMUM_COVERAGE_PERCENT = 80;
+const M122_TARGET_SIZE = 122;
+const M122_VERSION = "2.0";
+const M122_EFFECTIVE_DATE = "2026-08-21";
 
 const sectorSymbols = {
   Technology: [
@@ -39,7 +42,7 @@ const sectorSymbols = {
     "T",
     "VZ",
     "CHTR",
-    "EA",
+    "TTWO",
   ],
 
   "Consumer Discretionary": [
@@ -55,7 +58,7 @@ const sectorSymbols = {
     "MAR",
     "ORLY",
     "GM",
-    "F",
+    "DHI",
   ],
 
   Financials: [
@@ -65,7 +68,7 @@ const sectorSymbols = {
     "GS",
     "V",
     "MA",
-    "MS",
+    "PNC",
     "C",
     "AXP",
     "BLK",
@@ -85,7 +88,7 @@ const sectorSymbols = {
     "AMGN",
     "GILD",
     "ISRG",
-    "DHR",
+    "HCA",
     "BSX",
     "SYK",
   ],
@@ -103,7 +106,7 @@ const sectorSymbols = {
     "ETN",
     "WM",
     "PH",
-    "GD",
+    "DAL",
   ],
 
   "Consumer Staples": [
@@ -113,7 +116,7 @@ const sectorSymbols = {
     "KO",
     "PEP",
     "PM",
-    "MO",
+    "KR",
     "CL",
     "MDLZ",
     "KMB",
@@ -126,7 +129,7 @@ const sectorSymbols = {
     "EOG",
     "SLB",
     "MPC",
-    "PSX",
+    "EQT",
     "OXY",
     "VLO",
     "WMB",
@@ -158,7 +161,7 @@ const sectorSymbols = {
     "LIN",
     "FCX",
     "SHW",
-    "APD",
+    "PKG",
     "ECL",
     "NEM",
     "NUE",
@@ -170,6 +173,17 @@ const sectorSymbols = {
 type SectorName = keyof typeof sectorSymbols;
 
 const breadthSymbols = Object.values(sectorSymbols).flat();
+
+const uniqueBreadthSymbols = new Set(breadthSymbols);
+
+if (
+  breadthSymbols.length !== M122_TARGET_SIZE ||
+  uniqueBreadthSymbols.size !== M122_TARGET_SIZE
+) {
+  throw new Error(
+    `M122 ${M122_VERSION} must contain exactly ${M122_TARGET_SIZE} unique symbols.`,
+  );
+}
 
 const symbolToSector = Object.entries(sectorSymbols).reduce<
   Record<string, SectorName>
@@ -469,6 +483,10 @@ async function saveBreadthHistoryAndGetTrend({
       .from("market_breadth_history")
       .select(
         "trading_date, breadth_score",
+      )
+      .gte(
+        "trading_date",
+        M122_EFFECTIVE_DATE,
       )
       .lt("trading_date", tradingDate)
       .order("trading_date", {
@@ -1530,8 +1548,18 @@ export async function GET() {
       },
 
       methodology: {
+        name:
+          "MaicaTrades Market 122",
+        version:
+          M122_VERSION,
+        effectiveDate:
+          M122_EFFECTIVE_DATE,
         universe:
-          "Expanded 122-stock, multi-sector U.S. large-cap basket",
+          "122 liquid U.S.-listed common stocks selected for balanced large-cap market participation across all 11 sectors and economically distinct industries",
+        weighting:
+          "One stock, one vote",
+        reviewSchedule:
+          "Quarterly, with interim replacements for acquisitions, delistings, ineligible securities, or material loss of representativeness",
         updateFrequency:
           "Yahoo Finance data cached for approximately 30 minutes",
         scoreWeights: {

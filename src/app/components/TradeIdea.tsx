@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { fetchDashboardJson } from "@/lib/dashboard-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -18,6 +19,7 @@ type TradeIdeaData = {
   symbol: string;
   companyName: string;
   price: number;
+  selectedPrice?: number;
   previousClose: number;
   change: number;
   changePercent: number;
@@ -38,6 +40,22 @@ type TradeIdeaData = {
 type TradeIdeaResponse = {
   success: boolean;
   idea?: TradeIdeaData;
+  hasActiveTradeIdea?: boolean;
+  weekly?: {
+    locked: boolean;
+    status:
+      | "WAITING_FOR_ENTRY"
+      | "ACTIVE"
+      | "TARGET_HIT"
+      | "STOPPED_OUT"
+      | "EXPIRED"
+      | "NEEDS_REVIEW"
+      | null;
+    entryTriggeredAt?: string | null;
+    targetHitAt?: string | null;
+    stoppedOutAt?: string | null;
+    outcomeNote?: string | null;
+  };
   updatedAt?: string;
   error?: string;
 };
@@ -288,18 +306,14 @@ export default function TradeIdea() {
 
         setError(null);
 
-        const response = await fetch(
-          "/api/trade-idea",
-          {
-            cache: "no-store",
-          },
-        );
-
-        const result =
-          (await response.json()) as TradeIdeaResponse;
+        const { data: result, ok } =
+          await fetchDashboardJson<TradeIdeaResponse>(
+            "/api/trade-idea",
+            45_000,
+          );
 
         if (
-          !response.ok ||
+          !ok ||
           !result.success ||
           !result.idea
         ) {
@@ -361,7 +375,7 @@ export default function TradeIdea() {
         <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
           <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-blue-400">
             <Star size={17} />
-            Today&apos;s Trade Idea
+            This Week&apos;s Trade Idea
           </div>
         </div>
 
@@ -406,6 +420,86 @@ export default function TradeIdea() {
 
   const isShort = idea.direction === "SHORT";
 
+  const weekly = data?.weekly;
+  const terminalStatus =
+    weekly?.status === "TARGET_HIT" ||
+    weekly?.status === "STOPPED_OUT" ||
+    weekly?.status === "EXPIRED";
+
+  if (terminalStatus) {
+    const setupInvalidated =
+      weekly.status === "STOPPED_OUT" &&
+      !weekly.entryTriggeredAt;
+    const statusLabel = setupInvalidated
+      ? "Setup Invalidated"
+      : weekly.status === "TARGET_HIT"
+        ? "Target Hit"
+        : weekly.status === "STOPPED_OUT"
+          ? "Stopped Out"
+          : "Expired";
+
+    return (
+      <Card
+        onClick={() => {
+          router.push("/markets/trade-idea");
+        }}
+      >
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+          <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
+            <Star size={17} />
+            This Week&apos;s Trade Idea — Closed
+          </div>
+
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void loadTradeIdea(true);
+            }}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 text-xs font-medium text-slate-500 transition hover:text-blue-400 disabled:opacity-50"
+            aria-label="Refresh trade idea outcome"
+          >
+            <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
+            {refreshing ? "Refreshing" : "15 min delayed"}
+          </button>
+        </div>
+
+        <div className="p-5">
+          <div className={`rounded-xl border p-5 ${weekly.status === "TARGET_HIT" ? "border-emerald-500/25 bg-emerald-500/[0.06]" : "border-red-500/25 bg-red-500/[0.06]"}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className={`text-xs font-semibold uppercase tracking-[0.16em] ${weekly.status === "TARGET_HIT" ? "text-emerald-300" : "text-red-300"}`}>
+                  {statusLabel}
+                </p>
+                <p className="mt-2 text-2xl font-bold text-white">{idea.symbol}</p>
+                <p className="mt-1 text-xs text-slate-500">{idea.companyName}</p>
+              </div>
+
+              <div className="text-right">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Current price</p>
+                <p className="mt-1 text-2xl font-semibold text-white">{formatMoney(idea.price)}</p>
+              </div>
+            </div>
+
+            <p className="mt-4 text-sm leading-6 text-slate-300">
+              {weekly.outcomeNote ??
+                (setupInvalidated
+                  ? "Price crossed the invalidation level before entry, so this setup is no longer active."
+                  : "This weekly Trade Idea is no longer active.")}
+            </p>
+          </div>
+        </div>
+
+        <div className="border-t border-slate-800 px-5 py-4">
+          <span className="inline-flex items-center text-sm font-medium text-blue-400 transition group-hover:text-blue-300">
+            View Recorded Outcome →
+          </span>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card
       onClick={() => {
@@ -415,7 +509,7 @@ export default function TradeIdea() {
       <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
         <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-blue-400">
           <Star size={17} />
-          Today&apos;s Trade Idea
+          This Week&apos;s Trade Idea
         </div>
 
         <button
@@ -440,7 +534,7 @@ export default function TradeIdea() {
 
           {refreshing
             ? "Refreshing"
-            : "Live"}
+            : "15 min delayed"}
         </button>
       </div>
 
@@ -465,6 +559,10 @@ export default function TradeIdea() {
             </div>
 
             <div className="shrink-0 text-right">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                Current price
+              </p>
+
               <p className="text-2xl font-semibold text-white">
                 {formatMoney(idea.price)}
               </p>
@@ -480,6 +578,12 @@ export default function TradeIdea() {
                   idea.changePercent,
                 )}
               </p>
+
+              {typeof idea.selectedPrice === "number" && (
+                <p className="mt-1 text-[10px] text-slate-500">
+                  Selected at {formatMoney(idea.selectedPrice)}
+                </p>
+              )}
             </div>
           </div>
 

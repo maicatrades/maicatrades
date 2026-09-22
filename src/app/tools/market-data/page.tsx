@@ -108,7 +108,7 @@ export default function MarketDataPage() {
       setNews(Array.isArray(data.news) ? data.news : []);
 
       setSearchedSymbol(data.symbol || cleanSymbol);
-      activeSymbolRef.current = cleanSymbol;
+      activeSymbolRef.current = data.symbol || cleanSymbol;
 
       setLastUpdated(
         data.updatedAt
@@ -189,7 +189,7 @@ export default function MarketDataPage() {
         activeSymbolRef.current || searchedSymbol,
         false
       );
-    }, 5000);
+    }, 60000);
 
     return () => {
       window.clearInterval(timer);
@@ -222,9 +222,8 @@ export default function MarketDataPage() {
           </h1>
 
           <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-400">
-            Search a ticker to view live quote data, company details,
-            valuation metrics, recent news, and a simple local
-            watchlist.
+            Search by ticker or company name to view live quote data,
+company details, valuation metrics, recent news, and a simple local watchlist.
           </p>
         </section>
 
@@ -233,15 +232,15 @@ export default function MarketDataPage() {
             <input
               value={symbol}
               onChange={(event) => {
-                setSymbol(event.target.value.toUpperCase());
-              }}
+  setSymbol(event.target.value);
+}}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   handleSearch();
                 }
               }}
               className="rounded-xl border border-zinc-700 bg-black px-4 py-4 text-white outline-none transition focus:border-emerald-400"
-              placeholder="Enter ticker, ex: AAPL"
+              placeholder="Enter ticker or company name, ex: AAPL or Apple"
               aria-label="Stock ticker"
             />
 
@@ -428,13 +427,13 @@ export default function MarketDataPage() {
                 />
 
                 <InfoRow
-                  label="Avg Volume"
-                  value={formatNumber(
-                    metrics?.metric?.[
-                      "10DayAverageTradingVolume"
-                    ]
-                  )}
-                />
+  label="Avg Volume"
+  value={
+    typeof metrics?.metric?.["10DayAverageTradingVolume"] === "number"
+      ? `${metrics.metric["10DayAverageTradingVolume"].toFixed(2)}M`
+      : "—"
+  }
+/>
               </div>
             </section>
           </div>

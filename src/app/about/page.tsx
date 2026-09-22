@@ -4,8 +4,21 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "About MaicaTrades | Built for Busy Swing Traders",
+
   description:
     "Learn why MaicaTrades was created and how it helps busy swing traders organize market research, manage risk, and prepare more efficiently.",
+
+  alternates: {
+    canonical: "/about",
+  },
+
+  openGraph: {
+    title: "About MaicaTrades | Built for Busy Swing Traders",
+    description:
+      "Learn why MaicaTrades was created and how it helps busy swing traders organize market research, manage risk, and prepare more efficiently.",
+    url: "/about",
+    type: "website",
+  },
 };
 
 const researchQuestions = [

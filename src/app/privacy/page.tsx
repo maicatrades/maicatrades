@@ -8,7 +8,25 @@ import {
   ShieldCheck,
   UserCheck,
 } from "lucide-react";
+import type { Metadata } from "next";
+export const metadata: Metadata = {
+  title: "Privacy Policy | MaicaTrades",
 
+  description:
+    "Read the MaicaTrades Privacy Policy to learn what information may be collected, how it is used, how cookies are handled, and what choices users have regarding their data.",
+
+  alternates: {
+    canonical: "/privacy",
+  },
+
+  openGraph: {
+    title: "Privacy Policy | MaicaTrades",
+    description:
+      "Learn how MaicaTrades handles information, cookies, third-party services, data security, and user privacy choices.",
+    url: "/privacy",
+    type: "website",
+  },
+};
 export default function PrivacyPage() {
   return (
     <main className="min-h-screen bg-[#050b12] text-white">

@@ -1,7 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   AlertCircle,
   ArrowDownRight,
@@ -11,6 +16,7 @@ import {
   BarChart3,
   CalendarDays,
   Clock3,
+  Eye,
   LoaderCircle,
   RefreshCw,
   ShieldAlert,
@@ -19,28 +25,130 @@ import {
 } from "lucide-react";
 
 type Direction = "LONG" | "SHORT";
+
 type ChartPoint = {
   date: string;
   close: number;
   sma20: number | null;
 };
+
 type ScoreBreakdown = {
-  trend: number; marketDirection: number; priceAction: number; sectorStrength: number;
-  distanceToLevel: number; riskReward: number; relativeStrength: number;
-  earningsNews: number; momentum: number; total: number; availableMaximum: number;
+  trend: number;
+  marketDirection: number;
+  priceAction: number;
+  sectorStrength: number;
+  distanceToLevel: number;
+  riskReward: number;
+  relativeStrength: number;
+  earningsNews: number;
+  momentum: number;
+  total: number;
+  availableMaximum: number;
 };
+
+type QualificationFailure = {
+  code: string;
+  label: string;
+  detail: string;
+};
+
+type WeeklyTradeStatus =
+  | "WAITING_FOR_ENTRY"
+  | "ACTIVE"
+  | "TARGET_HIT"
+  | "STOPPED_OUT"
+  | "EXPIRED"
+  | "NEEDS_REVIEW";
+
+type WeeklyTradeMetadata = {
+  locked: boolean;
+  weekKey: string;
+  lockedAt?: string;
+  status: WeeklyTradeStatus | null;
+  entryTriggeredAt?: string | null;
+  targetHitAt?: string | null;
+  stoppedOutAt?: string | null;
+  expiredAt?: string | null;
+  needsReviewAt?: string | null;
+  outcomeNote?: string | null;
+  lastCheckedAt?: string | null;
+};
+
 type TradeIdea = {
-  symbol: string; companyName: string; direction: Direction; price: number; previousClose: number;
-  change: number; changePercent: number; setup: string; setupType: string; holdingPeriod: string;
-  entry: number; stopLoss: number; target: number; riskReward: number; confidenceScore: number;
-  confidenceStars: number; grade: string; tradeBias: string; patternDescription: string;
-  biasDescription: string; whyItMatters: string[]; managementPlan: string[];
-  sma20: number | null; sma160: number | null; rsi14: number | null;
-  marketDirection: string; scoreBreakdown: ScoreBreakdown; chart: ChartPoint[];
+  symbol: string;
+  companyName: string;
+  direction: Direction;
+  price: number;
+  selectedPrice?: number;
+  previousClose: number;
+  change: number;
+  changePercent: number;
+  setup: string;
+  setupType: string;
+  holdingPeriod: string;
+  entry: number;
+  stopLoss: number;
+  target: number;
+  riskReward: number;
+  confidenceScore: number;
+  confidenceStars: number;
+  grade: string;
+  tradeBias: string;
+  patternDescription: string;
+  biasDescription: string;
+  whyItMatters: string[];
+  managementPlan: string[];
+  sma20: number | null;
+  sma160: number | null;
+  rsi14: number | null;
+  marketDirection: string;
+  scoreBreakdown: ScoreBreakdown;
+  qualificationFailures?: QualificationFailure[];
+  chart: ChartPoint[];
 };
+
 type TradeIdeaResponse = {
-  success: boolean; hasQualifiedSetup?: boolean; idea?: TradeIdea; updatedAt?: string; error?: string;
+  success: boolean;
+  hasQualifiedSetup?: boolean;
+  idea?: TradeIdea;
+  weekly?: WeeklyTradeMetadata;
+  previousWeekly?:
+    | (WeeklyTradeMetadata & { idea: TradeIdea })
+    | null;
+  updatedAt?: string;
+  error?: string;
 };
+
+function weeklyStatusLabel(status: WeeklyTradeStatus | null | undefined) {
+  switch (status) {
+    case "WAITING_FOR_ENTRY":
+      return "Waiting for Entry";
+    case "ACTIVE":
+      return "Entry Triggered";
+    case "TARGET_HIT":
+      return "Target Hit";
+    case "STOPPED_OUT":
+      return "Stopped Out";
+    case "EXPIRED":
+      return "Expired";
+    case "NEEDS_REVIEW":
+      return "Needs Review";
+    default:
+      return "Scanning";
+  }
+}
+
+function weeklyOutcomeLabel(weekly: WeeklyTradeMetadata | null | undefined) {
+  if (weekly?.status === "STOPPED_OUT" && !weekly.entryTriggeredAt) {
+    return "Setup Invalidated";
+  }
+
+  return weeklyStatusLabel(weekly?.status);
+}
+
+function isOpenWeeklyStatus(status: WeeklyTradeStatus | null | undefined) {
+  return status === "WAITING_FOR_ENTRY" || status === "ACTIVE" || status === "NEEDS_REVIEW";
+}
 
 function formatMoney(
   value: number | null | undefined,
@@ -57,17 +165,158 @@ function formatMoney(
     maximumFractionDigits: 2,
   })}`;
 }
+
 function formatTime(value?: string) {
-  if (!value) return "Recently updated";
+  if (!value) {
+    return "Recently updated";
+  }
+
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Recently updated" : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  if (Number.isNaN(date.getTime())) {
+    return "Recently updated";
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
-function ConfidenceStars({ confidence }: { confidence: number }) {
-  const normalized = Math.max(0, Math.min(5, Math.round(confidence)));
-  return <div className="mt-2 flex text-amber-400" aria-label={`${normalized} out of 5 confidence`}>
-    {Array.from({ length: 5 }, (_, index) => <Star key={index} size={19} fill={index < normalized ? "currentColor" : "none"} className={index < normalized ? "text-amber-400" : "text-slate-600"} />)}
-  </div>;
+function ConfidenceStars({
+  confidence,
+}: {
+  confidence: number;
+}) {
+  const normalized = Math.max(
+    0,
+    Math.min(5, Math.round(confidence)),
+  );
+
+  return (
+    <div
+      className="mt-2 flex text-amber-400"
+      aria-label={`${normalized} out of 5 confidence`}
+    >
+      {Array.from({ length: 5 }, (_, index) => (
+        <Star
+          key={index}
+          size={19}
+          fill={
+            index < normalized
+              ? "currentColor"
+              : "none"
+          }
+          className={
+            index < normalized
+              ? "text-amber-400"
+              : "text-slate-600"
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function PreviousOpenTrade({
+  trade,
+}: {
+  trade: WeeklyTradeMetadata & { idea: TradeIdea };
+}) {
+  const { idea } = trade;
+  const isLong = idea.direction === "LONG";
+  const positiveChange = idea.changePercent >= 0;
+
+  return (
+    <section className="mb-8 overflow-hidden rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-500/[0.08] to-[#071019] shadow-[0_20px_50px_rgba(0,0,0,0.2)]">
+      <div className="flex flex-col justify-between gap-4 border-b border-amber-500/15 px-5 py-5 sm:flex-row sm:items-center sm:px-6">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">
+            <Clock3 size={14} />
+            Open Trade From Last Week
+          </div>
+
+          <h2 className="mt-3 text-2xl font-bold text-white">
+            {idea.symbol} remains under active tracking
+          </h2>
+
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            This published setup carries forward until its target or stop is reached. It is tracked separately from this week&apos;s new dashboard idea.
+          </p>
+        </div>
+
+        <div className="shrink-0 rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Week of</p>
+          <p className="mt-1 font-semibold text-slate-200">{trade.weekKey}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-6 p-5 sm:p-6 lg:grid-cols-[1fr_360px]">
+        <div>
+          <div className="flex flex-wrap items-start justify-between gap-5">
+            <div>
+              <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${
+                isLong
+                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                  : "border-red-500/20 bg-red-500/10 text-red-400"
+              }`}>
+                {isLong ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                {idea.direction} · {idea.setup}
+              </div>
+
+              <p className="mt-4 text-3xl font-bold text-white">{idea.symbol}</p>
+              <p className="mt-1 text-sm text-slate-500">{idea.companyName}</p>
+            </div>
+
+            <div className="sm:text-right">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Current price</p>
+              <p className="mt-1 text-2xl font-semibold text-white">{formatMoney(idea.price)}</p>
+              <p className={`mt-1 text-sm font-semibold ${positiveChange ? "text-emerald-400" : "text-red-400"}`}>
+                {positiveChange ? "+" : ""}{idea.changePercent.toFixed(2)}%
+              </p>
+            </div>
+          </div>
+
+          <p className="mt-5 text-sm leading-7 text-slate-400">{idea.patternDescription}</p>
+
+          {trade.outcomeNote && (
+            <p className="mt-4 rounded-xl border border-slate-800 bg-slate-950/30 p-4 text-sm leading-6 text-slate-400">
+              {trade.outcomeNote}
+            </p>
+          )}
+        </div>
+
+        <aside className="rounded-xl border border-slate-800 bg-slate-950/35 p-5">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tracking status</p>
+            <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-300">
+              {weeklyStatusLabel(trade.status)}
+            </span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-600">Entry</p>
+              <p className="mt-1 font-semibold text-white">{formatMoney(idea.entry)}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-600">Stop</p>
+              <p className="mt-1 font-semibold text-red-400">{formatMoney(idea.stopLoss)}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-600">Target</p>
+              <p className="mt-1 font-semibold text-emerald-400">{formatMoney(idea.target)}</p>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-lg border border-slate-800 bg-[#06101a] p-4">
+            <p className="text-xs uppercase tracking-wide text-slate-600">Risk / Reward</p>
+            <p className="mt-2 text-xl font-bold text-slate-200">1 : {idea.riskReward.toFixed(2)}</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
 }
 
 function TradeChart({
@@ -87,7 +336,8 @@ function TradeChart({
     const validPoints = points.filter(
       (point) =>
         Number.isFinite(point.close) &&
-        (point.sma20 === null || Number.isFinite(point.sma20)),
+        (point.sma20 === null ||
+          Number.isFinite(point.sma20)),
     );
 
     if (
@@ -104,15 +354,18 @@ function TradeChart({
     const paddingX = 36;
     const paddingY = 28;
 
-    const values = validPoints.flatMap((point) =>
-      typeof point.sma20 === "number" && Number.isFinite(point.sma20)
-        ? [point.close, point.sma20]
-        : [point.close],
+    const values = validPoints.flatMap(
+      (point) =>
+        typeof point.sma20 === "number" &&
+        Number.isFinite(point.sma20)
+          ? [point.close, point.sma20]
+          : [point.close],
     );
 
     values.push(entry, stopLoss, target);
 
-    const finiteValues = values.filter(Number.isFinite);
+    const finiteValues =
+      values.filter(Number.isFinite);
 
     if (finiteValues.length < 2) {
       return null;
@@ -124,22 +377,29 @@ function TradeChart({
 
     const toX = (index: number) =>
       paddingX +
-      (index / (validPoints.length - 1)) * (width - paddingX * 2);
+      (index / (validPoints.length - 1)) *
+        (width - paddingX * 2);
 
     const toY = (value: number) =>
       height -
       paddingY -
-      ((value - minimum) / range) * (height - paddingY * 2);
+      ((value - minimum) / range) *
+        (height - paddingY * 2);
 
     const pricePath = validPoints
       .map(
         (point, index) =>
-          `${index === 0 ? "M" : "L"} ${toX(index)} ${toY(point.close)}`,
+          `${index === 0 ? "M" : "L"} ${toX(
+            index,
+          )} ${toY(point.close)}`,
       )
       .join(" ");
 
     const smaPoints = validPoints
-      .map((point, index) => ({ point, index }))
+      .map((point, index) => ({
+        point,
+        index,
+      }))
       .filter(
         ({ point }) =>
           typeof point.sma20 === "number" &&
@@ -149,7 +409,9 @@ function TradeChart({
     const smaPath = smaPoints
       .map(
         ({ point, index }, pathIndex) =>
-          `${pathIndex === 0 ? "M" : "L"} ${toX(index)} ${toY(
+          `${
+            pathIndex === 0 ? "M" : "L"
+          } ${toX(index)} ${toY(
             point.sma20 as number,
           )}`,
       )
@@ -174,18 +436,27 @@ function TradeChart({
       stopY,
       targetY,
     };
-  }, [points, entry, stopLoss, target]);
+  }, [
+    points,
+    entry,
+    stopLoss,
+    target,
+  ]);
 
   if (!chart) {
     return (
       <div className="flex h-[360px] items-center justify-center rounded-xl border border-slate-800 bg-[#06101a] px-6 text-center text-sm text-slate-500">
-        Technical chart data is temporarily unavailable. Refresh the scanner
-        to try again.
+        Technical chart data is temporarily
+        unavailable. Refresh the scanner to try
+        again.
       </div>
     );
   }
 
-  const priceColor = direction === "LONG" ? "#22c55e" : "#ef4444";
+  const priceColor =
+    direction === "LONG"
+      ? "#22c55e"
+      : "#ef4444";
 
   return (
     <div className="relative h-[360px] overflow-hidden rounded-xl border border-slate-800 bg-[#06101a]">
@@ -251,109 +522,1031 @@ function TradeChart({
   );
 }
 
-function LoadingState() { return <main className="flex min-h-screen items-center justify-center bg-[#050b11] px-5 text-white"><div className="text-center"><LoaderCircle size={38} className="mx-auto animate-spin text-blue-400" /><p className="mt-4 font-semibold text-slate-200">Scanning long and short setups</p><p className="mt-2 text-sm text-slate-500">Comparing trend, market direction, price action, sector strength, and risk.</p></div></main>; }
-function ErrorState({ message }: { message: string }) { return <main className="flex min-h-screen items-center justify-center bg-[#050b11] px-5 text-white"><div className="max-w-md rounded-2xl border border-red-500/20 bg-[#09131d] p-8 text-center"><AlertCircle size={34} className="mx-auto text-red-400" /><h1 className="mt-4 text-xl font-bold">Trade idea is unavailable</h1><p className="mt-3 text-sm leading-6 text-slate-400">{message}</p><Link href="/dashboard" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-blue-400"><ArrowLeft size={16} />Back to Dashboard</Link></div></main>; }
+function LoadingState() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#050b11] px-5 text-white">
+      <div className="text-center">
+        <LoaderCircle
+          size={38}
+          className="mx-auto animate-spin text-blue-400"
+        />
+
+        <p className="mt-4 font-semibold text-slate-200">
+          Scanning long and short setups
+        </p>
+
+        <p className="mt-2 text-sm text-slate-500">
+          Comparing trend, market direction,
+          price action, sector strength, and risk.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function ErrorState({
+  message,
+}: {
+  message: string;
+}) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#050b11] px-5 text-white">
+      <div className="max-w-md rounded-2xl border border-red-500/20 bg-[#09131d] p-8 text-center">
+        <AlertCircle
+          size={34}
+          className="mx-auto text-red-400"
+        />
+
+        <h1 className="mt-4 text-xl font-bold">
+          Trade idea is unavailable
+        </h1>
+
+        <p className="mt-3 text-sm leading-6 text-slate-400">
+          {message}
+        </p>
+
+        <Link
+          href="/dashboard"
+          className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-blue-400"
+        >
+          <ArrowLeft size={16} />
+          Back to Dashboard
+        </Link>
+      </div>
+    </main>
+  );
+}
 
 export default function TradeIdeaPage() {
-  const [data, setData] = useState<TradeIdeaResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [data, setData] =
+    useState<TradeIdeaResponse | null>(null);
 
-  const loadTradeIdea = useCallback(async (background = false) => {
-    try {
-      background ? setRefreshing(true) : setLoading(true);
-      setError(null);
-      const response = await fetch("/api/trade-idea", { cache: "no-store" });
-      const result = (await response.json()) as TradeIdeaResponse;
-      if (!response.ok || !result.success || !result.idea) throw new Error(result.error ?? "Unable to load the trade idea.");
-      setData(result);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to load the trade idea.");
-    } finally { setLoading(false); setRefreshing(false); }
-  }, []);
+  const [loading, setLoading] =
+    useState(true);
+
+  const [refreshing, setRefreshing] =
+    useState(false);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  const loadTradeIdea = useCallback(
+    async (background = false) => {
+      try {
+        background
+          ? setRefreshing(true)
+          : setLoading(true);
+
+        setError(null);
+
+        const response = await fetch(
+          "/api/trade-idea",
+          {
+            cache: "no-store",
+          },
+        );
+
+        const result =
+          (await response.json()) as TradeIdeaResponse;
+
+        if (
+          !response.ok ||
+          !result.success ||
+          !result.idea
+        ) {
+          throw new Error(
+            result.error ??
+              "Unable to load the trade idea.",
+          );
+        }
+
+        setData(result);
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Unable to load the trade idea.",
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     void loadTradeIdea();
-    const interval = window.setInterval(() => void loadTradeIdea(true), 15 * 60 * 1000);
-    return () => window.clearInterval(interval);
+
+    const interval = window.setInterval(
+      () => void loadTradeIdea(true),
+      15 * 60 * 1000,
+    );
+
+    return () =>
+      window.clearInterval(interval);
   }, [loadTradeIdea]);
 
-  if (loading) return <LoadingState />;
-  if (error && !data) return <ErrorState message={error} />;
-  if (!data?.idea) return <ErrorState message="No valid trade idea data was returned." />;
+  if (loading) {
+    return <LoadingState />;
+  }
+
+  if (error && !data) {
+    return <ErrorState message={error} />;
+  }
+
+  if (!data?.idea) {
+    return (
+      <ErrorState message="No valid trade idea data was returned." />
+    );
+  }
 
   const idea = data.idea;
-  const isLong = idea.direction === "LONG";
-  const qualified = data.hasQualifiedSetup !== false;
-  const accentText = isLong ? "text-emerald-400" : "text-red-400";
-  const accentBorder = isLong ? "border-emerald-500/20 bg-emerald-500/10" : "border-red-500/20 bg-red-500/10";
-  const DirectionIcon = isLong ? ArrowUpRight : ArrowDownRight;
-  const positiveChange = idea.changePercent >= 0;
+  const qualified =
+    data.hasQualifiedSetup === true;
 
-  return <main className="min-h-screen bg-[#050b11] text-white"><div className="mx-auto max-w-7xl px-5 py-8 sm:px-6 lg:px-8">
-    <div className="mb-8 flex flex-wrap items-center justify-between gap-4"><Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-blue-400"><ArrowLeft size={17} />Back to Dashboard</Link><p className="text-xs text-slate-600">Updated {formatTime(data.updatedAt)}</p></div>
+  const isLong =
+    idea.direction === "LONG";
 
-    {!qualified && <section className="mb-6 rounded-2xl border border-amber-500/25 bg-amber-500/5 p-5"><div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 shrink-0 text-amber-400" size={20} /><div><h2 className="font-semibold text-amber-300">No high-quality setup met the full threshold</h2><p className="mt-1 text-sm leading-6 text-slate-400">The scanner is showing the highest-ranked candidate for monitoring only. Wait for confirmation rather than forcing a trade.</p></div></div></section>}
+  const accentText = isLong
+    ? "text-emerald-400"
+    : "text-red-400";
 
-    <section className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0b1722] to-[#071019] p-6 shadow-[0_20px_50px_rgba(0,0,0,0.25)] sm:p-8">
-      <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><div className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${accentBorder} ${accentText}`}><DirectionIcon size={14} />{idea.direction} setup · Grade {idea.grade}</div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Today&apos;s {isLong ? "Long" : "Short"} Trade Idea</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">The adaptive scanner compared both long and short opportunities and selected the strongest market-aligned candidate.</p></div>
-      <div className="flex flex-wrap gap-3"><div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400"><Clock3 size={15} className="text-blue-400" />Delayed market data</div><div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400"><CalendarDays size={15} className="text-blue-400" />{idea.holdingPeriod}</div><button type="button" onClick={() => void loadTradeIdea(true)} disabled={refreshing} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-60"><RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />Refresh</button></div></div>
-    </section>
+  const accentBorder = isLong
+    ? "border-emerald-500/20 bg-emerald-500/10"
+    : "border-red-500/20 bg-red-500/10";
 
-    <section className="mb-6 grid gap-6 lg:grid-cols-[1fr_340px]">
-      <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#09131d]"><div className="flex flex-col justify-between gap-4 border-b border-slate-800 px-5 py-5 sm:flex-row sm:items-end"><div><p className="text-3xl font-bold">{idea.symbol}</p><p className="mt-1 text-sm text-slate-500">{idea.companyName}</p></div><div className="sm:text-right"><p className="text-3xl font-semibold">{formatMoney(idea.price)}</p><p className={`mt-1 text-sm font-semibold ${positiveChange ? "text-emerald-400" : "text-red-400"}`}>{positiveChange ? "+" : ""}{idea.changePercent.toFixed(2)}%</p></div></div><div className="p-5"><TradeChart points={idea.chart} entry={idea.entry} stopLoss={idea.stopLoss} target={idea.target} direction={idea.direction} /><div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-500"><div>Price</div><div>20 SMA</div><div>Entry</div><div>Stop</div><div>Target</div></div></div></div>
-      <aside className="rounded-2xl border border-slate-800 bg-[#09131d] p-5"><div className="flex items-center gap-2"><DirectionIcon size={18} className={accentText} /><h2 className="text-lg font-semibold">Setup Overview</h2></div><div className="mt-5 space-y-5"><div><p className={`text-xs font-semibold uppercase tracking-wide ${accentText}`}>Pattern</p><p className="mt-1 text-lg font-semibold">{idea.setup}</p><p className="mt-1 text-sm leading-6 text-slate-400">{idea.patternDescription}</p></div><div><p className="text-xs font-semibold uppercase tracking-wide text-blue-400">Market Regime</p><p className="mt-1 text-lg font-semibold">{idea.marketDirection}</p><p className="mt-1 text-sm leading-6 text-slate-400">{idea.biasDescription}</p></div><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-slate-800 bg-slate-950/35 p-3"><p className="text-xs uppercase tracking-wide text-slate-500">Score</p><p className="mt-1 text-lg font-semibold">{idea.confidenceScore}/96</p><ConfidenceStars confidence={idea.confidenceStars} /></div><div className="rounded-xl border border-slate-800 bg-slate-950/35 p-3"><p className="text-xs uppercase tracking-wide text-slate-500">Grade</p><p className={`mt-1 text-2xl font-bold ${accentText}`}>{idea.grade}</p><p className="mt-2 text-xs text-slate-500">{idea.setupType}</p></div></div><div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4"><div className="flex items-start gap-3"><ShieldAlert size={18} className="mt-0.5 shrink-0 text-red-400" /><div><p className="text-sm font-semibold text-red-400">Risk Reminder</p><p className="mt-1 text-xs leading-5 text-slate-400">Trade setups identify potential opportunities, not guarantees. Confirm the trigger and size positions appropriately.</p></div></div></div></div></aside>
-    </section>
+  const DirectionIcon = isLong
+    ? ArrowUpRight
+    : ArrowDownRight;
 
-    <section className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{[
-      ["Entry", `${isLong ? "Above" : "Below"} ${formatMoney(idea.entry)}`, isLong ? "Wait for confirmation above resistance." : "Wait for confirmation below support."],
-      ["Stop Loss", formatMoney(idea.stopLoss), isLong ? "Invalidation below support." : "Invalidation above resistance."],
-      ["Target", formatMoney(idea.target), isLong ? "Initial upside objective." : "Initial downside objective."],
-      ["Risk / Reward", `1 : ${idea.riskReward.toFixed(2)}`, "Based on the current entry, stop, and target."],
-    ].map(([label, value, description]) => <div key={label} className="rounded-xl border border-slate-800 bg-[#09131d] p-5"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p><p className="mt-2 text-xl font-bold text-white">{value}</p><p className="mt-2 text-sm leading-5 text-slate-400">{description}</p></div>)}</section>
+  const positiveChange =
+    idea.changePercent >= 0;
 
-    <section className="mb-6 grid gap-4 sm:grid-cols-3">
-      <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
-        <p className="text-xs uppercase tracking-wide text-slate-500">20 SMA</p>
-        <p className="mt-2 text-xl font-bold">
-          {idea.sma20 === null || idea.sma20 === undefined
-            ? "—"
-            : formatMoney(idea.sma20)}
-        </p>
-      </div>
+  const qualificationFailures =
+    idea.qualificationFailures ?? [];
 
-      <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
-        <p className="text-xs uppercase tracking-wide text-slate-500">160 SMA</p>
-        <p className="mt-2 text-xl font-bold">
-          {idea.sma160 === null || idea.sma160 === undefined
-            ? "—"
-            : formatMoney(idea.sma160)}
-        </p>
-      </div>
+  const primaryFailure =
+    qualificationFailures[0];
 
-      <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
-        <p className="text-xs uppercase tracking-wide text-slate-500">RSI 14</p>
-        <p className="mt-2 text-xl font-bold">
-          {idea.rsi14 === null || !Number.isFinite(idea.rsi14)
-            ? "—"
-            : idea.rsi14.toFixed(1)}
-        </p>
-        {idea.rsi14 !== null && Number.isFinite(idea.rsi14) && (
-          <p className="mt-1 text-xs text-slate-500">
-            {idea.rsi14 >= 70
-              ? "Overbought"
-              : idea.rsi14 <= 30
-                ? "Oversold"
-                : idea.rsi14 >= 50
-                  ? "Positive momentum"
-                  : "Neutral momentum"}
+  const weekly = data.weekly;
+  const currentTradeClosed =
+    weekly?.status === "TARGET_HIT" ||
+    weekly?.status === "STOPPED_OUT" ||
+    weekly?.status === "EXPIRED";
+  const previousOpenTrade =
+    data.previousWeekly && isOpenWeeklyStatus(data.previousWeekly.status)
+      ? data.previousWeekly
+      : null;
+
+  /*
+    IMPORTANT:
+    If no setup meets the actionable threshold,
+    do not present the highest-ranked candidate
+    as an active Trade Idea.
+  */
+  if (!qualified) {
+    return (
+      <main className="min-h-screen bg-[#050b11] text-white">
+        <div className="mx-auto max-w-6xl px-5 py-8 sm:px-6 lg:px-8">
+          <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-blue-400"
+            >
+              <ArrowLeft size={17} />
+              Back to Dashboard
+            </Link>
+
+            <p className="text-xs text-slate-600">
+              Updated{" "}
+              {formatTime(data.updatedAt)}
+            </p>
+          </div>
+
+          {previousOpenTrade && <PreviousOpenTrade trade={previousOpenTrade} />}
+
+          <section className="rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-500/[0.08] to-[#071019] p-6 shadow-[0_20px_50px_rgba(0,0,0,0.25)] sm:p-8">
+            <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-3xl">
+                <div className="inline-flex items-center gap-2 rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">
+                  <ShieldAlert size={15} />
+                  No qualified setup
+                </div>
+
+                <h1 className="mt-4 text-3xl font-bold tracking-tight sm:text-4xl">
+                  No Qualified Trade Idea Today
+                </h1>
+
+                <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-400 sm:text-base">
+                  None of the setups currently
+                  meet the full MaicaTrades
+                  technical, market-alignment,
+                  extension, and risk/reward
+                  requirements. There is no need
+                  to force a trade when the
+                  scanner does not find one.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  void loadTradeIdea(true)
+                }
+                disabled={refreshing}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950/40 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-60"
+              >
+                <RefreshCw
+                  size={16}
+                  className={
+                    refreshing
+                      ? "animate-spin"
+                      : ""
+                  }
+                />
+
+                {refreshing
+                  ? "Scanning..."
+                  : "Refresh Scanner"}
+              </button>
+            </div>
+          </section>
+
+          <section className="mt-6 rounded-2xl border border-slate-800 bg-[#09131d]">
+            <div className="border-b border-slate-800 px-5 py-5 sm:px-6">
+              <div className="flex items-center gap-2">
+                <Eye
+                  size={18}
+                  className="text-blue-400"
+                />
+
+                <h2 className="text-lg font-semibold">
+                  Highest-Ranked Setup to Watch
+                </h2>
+              </div>
+
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                This candidate ranked highest in
+                the current scan but did not meet
+                the minimum requirements to become
+                today&apos;s featured Trade Idea.
+              </p>
+            </div>
+
+            <div className="grid gap-6 p-5 sm:p-6 lg:grid-cols-[1fr_320px]">
+              <div>
+                <div className="flex flex-wrap items-start justify-between gap-5">
+                  <div>
+                    <div
+                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${accentBorder} ${accentText}`}
+                    >
+                      <DirectionIcon size={14} />
+
+                      {idea.direction} candidate
+                    </div>
+
+                    <h3 className="mt-4 text-3xl font-bold">
+                      {idea.symbol}
+                    </h3>
+
+                    <p className="mt-1 text-sm text-slate-500">
+                      {idea.companyName}
+                    </p>
+                  </div>
+
+                  <div className="sm:text-right">
+                    <p className="text-2xl font-semibold">
+                      {formatMoney(idea.price)}
+                    </p>
+
+                    <p
+                      className={`mt-1 text-sm font-semibold ${
+                        positiveChange
+                          ? "text-emerald-400"
+                          : "text-red-400"
+                      }`}
+                    >
+                      {positiveChange ? "+" : ""}
+                      {idea.changePercent.toFixed(
+                        2,
+                      )}
+                      %
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">
+                    Monitoring only
+                  </p>
+
+                  <p className="mt-3 text-sm leading-7 text-slate-400">
+                    {idea.patternDescription}
+                  </p>
+
+                  <p className="mt-3 text-sm leading-7 text-slate-400">
+                    {primaryFailure
+                      ? primaryFailure.detail
+                      : "This setup did not satisfy every qualification requirement."}
+                    {" "}Entry, stop, target, and
+                    trade management levels are
+                    intentionally not presented as
+                    an active trade plan.
+                  </p>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/35 p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">
+                      Setup
+                    </p>
+
+                    <p className="mt-2 font-semibold text-slate-200">
+                      {idea.setup}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/35 p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">
+                      Market Regime
+                    </p>
+
+                    <p className="mt-2 font-semibold text-slate-200">
+                      {idea.marketDirection}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/35 p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">
+                      Scanner Status
+                    </p>
+
+                    <p className="mt-2 font-semibold text-amber-300">
+                      {primaryFailure?.label ??
+                        "Did Not Qualify"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <aside className="rounded-xl border border-slate-800 bg-slate-950/30 p-5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Candidate Score
+                </p>
+
+                <div className="mt-3 flex items-end gap-2">
+                  <p className="text-4xl font-bold text-white">
+                    {idea.confidenceScore}
+                  </p>
+
+                  <p className="pb-1 text-sm text-slate-500">
+                    /96
+                  </p>
+                </div>
+
+                <ConfidenceStars
+                  confidence={
+                    idea.confidenceStars
+                  }
+                />
+
+                <div className="mt-5 rounded-lg border border-slate-800 bg-[#06101a] p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Score Requirement
+                  </p>
+
+                  <p
+                    className={`mt-2 text-2xl font-bold ${
+                      idea.confidenceScore >= 62
+                        ? "text-emerald-400"
+                        : "text-amber-300"
+                    }`}
+                  >
+                    {idea.confidenceScore >= 62
+                      ? "Passed"
+                      : "Below 62"}
+                  </p>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-slate-800 bg-[#06101a] p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Grade
+                  </p>
+
+                  <p className="mt-2 text-2xl font-bold text-slate-200">
+                    {idea.grade}
+                  </p>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-slate-800 bg-[#06101a] p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Risk / Reward
+                  </p>
+
+                  <p className="mt-2 text-xl font-bold text-slate-200">
+                    1 :{" "}
+                    {idea.riskReward.toFixed(2)}
+                  </p>
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          <section className="mt-6 rounded-2xl border border-slate-800 bg-[#09131d] p-5 sm:p-6">
+            <div className="flex items-center gap-2">
+              <BarChart3
+                size={18}
+                className="text-blue-400"
+              />
+
+              <h2 className="text-lg font-semibold">
+                Why It Did Not Qualify
+              </h2>
+            </div>
+
+            <p className="mt-3 text-sm leading-7 text-slate-400">
+              {qualificationFailures.length > 0
+                ? "This candidate failed the following qualification check(s):"
+                : "This candidate did not satisfy every qualification requirement."}
+            </p>
+
+            {qualificationFailures.length > 0 && (
+              <div className="mt-4 space-y-3">
+                {qualificationFailures.map(
+                  (failure) => (
+                    <div
+                      key={failure.code}
+                      className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-4"
+                    >
+                      <p className="font-semibold text-amber-300">
+                        {failure.label}
+                      </p>
+
+                      <p className="mt-1 text-sm leading-6 text-slate-400">
+                        {failure.detail}
+                      </p>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Trend Score
+                </p>
+
+                <p className="mt-2 text-xl font-bold">
+                  {
+                    idea.scoreBreakdown
+                      .trend
+                  }
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Price Action
+                </p>
+
+                <p className="mt-2 text-xl font-bold">
+                  {
+                    idea.scoreBreakdown
+                      .priceAction
+                  }
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Relative Strength
+                </p>
+
+                <p className="mt-2 text-xl font-bold">
+                  {
+                    idea.scoreBreakdown
+                      .relativeStrength
+                  }
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Sector Strength
+                </p>
+
+                <p className="mt-2 text-xl font-bold">
+                  {
+                    idea.scoreBreakdown
+                      .sectorStrength
+                  }
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <p className="mt-8 text-center text-xs leading-5 text-slate-600">
+            Market data is supplied by Yahoo
+            Finance and may be delayed. Scanner
+            candidates are educational and are
+            not financial advice.
           </p>
-        )}
-      </div>
-    </section>
+        </div>
+      </main>
+    );
+  }
 
-    <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-[#09131d] p-5"><div className="flex items-center gap-2"><Target size={18} className="text-blue-400" /><h2 className="text-lg font-semibold">Why This Setup Matters</h2></div><div className="mt-4 space-y-4">{idea.whyItMatters.map((paragraph, index) => <p key={index} className="text-sm leading-7 text-slate-400">{paragraph}</p>)}</div></div><div className="rounded-2xl border border-slate-800 bg-[#09131d] p-5"><div className="flex items-center gap-2"><BarChart3 size={18} className="text-blue-400" /><h2 className="text-lg font-semibold">Trade Management Plan</h2></div><div className="mt-4 space-y-4 text-sm text-slate-400">{idea.managementPlan.map((step, index) => <div key={index} className="flex gap-3"><ArrowRight size={16} className="mt-0.5 shrink-0 text-blue-400" /><p>{step}</p></div>)}</div></div></section>
-    <p className="mt-8 text-center text-xs text-slate-600">Market data is supplied by Yahoo Finance and may be delayed. Trade setups are educational and are not financial advice.</p>
-  </div></main>;
+  /*
+    QUALIFIED TRADE IDEA
+  */
+
+  return (
+    <main className="min-h-screen bg-[#050b11] text-white">
+      <div className="mx-auto max-w-7xl px-5 py-8 sm:px-6 lg:px-8">
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 text-sm font-medium text-slate-400 transition hover:text-blue-400"
+          >
+            <ArrowLeft size={17} />
+            Back to Dashboard
+          </Link>
+
+          <p className="text-xs text-slate-600">
+            Updated{" "}
+            {formatTime(data.updatedAt)}
+          </p>
+        </div>
+
+        {previousOpenTrade && <PreviousOpenTrade trade={previousOpenTrade} />}
+
+        {currentTradeClosed && (
+          <section className="mb-6 rounded-2xl border border-red-500/25 bg-red-500/[0.06] p-5 sm:p-6">
+            <div className="flex items-start gap-3">
+              <ShieldAlert size={20} className="mt-0.5 shrink-0 text-red-400" />
+              <div>
+                <p className="font-semibold text-red-300">
+                  {weeklyOutcomeLabel(weekly)} — this setup is no longer active
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  {weekly?.outcomeNote ?? "The weekly Trade Idea has reached a terminal outcome and is retained below as a record."}
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className={`mb-8 overflow-hidden rounded-2xl border bg-gradient-to-br from-[#0b1722] to-[#071019] p-6 shadow-[0_20px_50px_rgba(0,0,0,0.25)] sm:p-8 ${currentTradeClosed ? "border-red-500/20" : "border-slate-800"}`}>
+          <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+            <div>
+              <div
+                className={`mb-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${accentBorder} ${accentText}`}
+              >
+                <DirectionIcon size={14} />
+                {idea.direction} setup · Grade{" "}
+                {idea.grade}
+              </div>
+
+              {weekly?.locked && (
+                <div className="mb-3 ml-2 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-blue-300">
+                  <CalendarDays size={14} />
+                  Weekly idea locked
+                </div>
+              )}
+
+              <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+                {currentTradeClosed ? "Recorded" : "This Week's"}{" "}
+                {isLong ? "Long" : "Short"} Trade
+                Idea
+              </h1>
+
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
+                {currentTradeClosed
+                  ? "This setup is closed and remains here as the official weekly outcome. It is not an active trade opportunity."
+                  : "The adaptive scanner compared both long and short opportunities and selected the strongest qualified market-aligned candidate."}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
+                <Clock3
+                  size={15}
+                  className="text-blue-400"
+                />
+                Delayed market data
+              </div>
+
+              <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
+                <CalendarDays
+                  size={15}
+                  className="text-blue-400"
+                />
+                {idea.holdingPeriod}
+              </div>
+
+              {weekly?.locked && (
+                <div className="flex items-center gap-2 rounded-lg border border-blue-500/25 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-300">
+                  <Target size={15} />
+                  {weeklyOutcomeLabel(weekly)}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() =>
+                  void loadTradeIdea(true)
+                }
+                disabled={refreshing}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-blue-500/40 hover:text-blue-400 disabled:opacity-60"
+              >
+                <RefreshCw
+                  size={15}
+                  className={
+                    refreshing
+                      ? "animate-spin"
+                      : ""
+                  }
+                />
+
+                Refresh
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {weekly?.locked && (
+          <section className="mb-6 rounded-2xl border border-blue-500/20 bg-blue-500/[0.05] p-5 sm:p-6">
+            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-300">
+                  Weekly Tracking Status
+                </p>
+
+                <p className="mt-2 text-xl font-bold text-white">
+                  {weeklyStatusLabel(weekly.status)}
+                </p>
+
+                <p className="mt-2 text-sm leading-6 text-slate-400">
+                  {weekly.outcomeNote ??
+                    "This setup is locked and will not be replaced by another scanner candidate during the current week."}
+                </p>
+              </div>
+
+              <div className="shrink-0 rounded-xl border border-slate-800 bg-slate-950/35 px-4 py-3 text-sm text-slate-400">
+                Week of{" "}
+                <span className="font-semibold text-slate-200">
+                  {weekly.weekKey}
+                </span>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className="mb-6 grid gap-6 lg:grid-cols-[1fr_340px]">
+          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#09131d]">
+            <div className="flex flex-col justify-between gap-4 border-b border-slate-800 px-5 py-5 sm:flex-row sm:items-end">
+              <div>
+                <p className="text-3xl font-bold">
+                  {idea.symbol}
+                </p>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  {idea.companyName}
+                </p>
+              </div>
+
+              <div className="sm:text-right">
+                <p className="mb-1 text-xs uppercase tracking-wide text-slate-600">
+                  Current price
+                </p>
+
+                <p className="text-3xl font-semibold">
+                  {formatMoney(idea.price)}
+                </p>
+
+                <p
+                  className={`mt-1 text-sm font-semibold ${
+                    positiveChange
+                      ? "text-emerald-400"
+                      : "text-red-400"
+                  }`}
+                >
+                  {positiveChange ? "+" : ""}
+                  {idea.changePercent.toFixed(2)}
+                  %
+                </p>
+
+                {typeof idea.selectedPrice === "number" && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Selected at {formatMoney(idea.selectedPrice)}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="p-5">
+              <TradeChart
+                points={idea.chart}
+                entry={idea.entry}
+                stopLoss={idea.stopLoss}
+                target={idea.target}
+                direction={idea.direction}
+              />
+
+              <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-500">
+                <div>Price</div>
+                <div>20 SMA</div>
+                <div>Entry</div>
+                <div>Stop</div>
+                <div>Target</div>
+              </div>
+            </div>
+          </div>
+
+          <aside className="rounded-2xl border border-slate-800 bg-[#09131d] p-5">
+            <div className="flex items-center gap-2">
+              <DirectionIcon
+                size={18}
+                className={accentText}
+              />
+
+              <h2 className="text-lg font-semibold">
+                Setup Overview
+              </h2>
+            </div>
+
+            <div className="mt-5 space-y-5">
+              <div>
+                <p
+                  className={`text-xs font-semibold uppercase tracking-wide ${accentText}`}
+                >
+                  Pattern
+                </p>
+
+                <p className="mt-1 text-lg font-semibold">
+                  {idea.setup}
+                </p>
+
+                <p className="mt-1 text-sm leading-6 text-slate-400">
+                  {idea.patternDescription}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-400">
+                  Market Regime
+                </p>
+
+                <p className="mt-1 text-lg font-semibold">
+                  {idea.marketDirection}
+                </p>
+
+                <p className="mt-1 text-sm leading-6 text-slate-400">
+                  {idea.biasDescription}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/35 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Score
+                  </p>
+
+                  <p className="mt-1 text-lg font-semibold">
+                    {idea.confidenceScore}/96
+                  </p>
+
+                  <ConfidenceStars
+                    confidence={
+                      idea.confidenceStars
+                    }
+                  />
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-950/35 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Grade
+                  </p>
+
+                  <p
+                    className={`mt-1 text-2xl font-bold ${accentText}`}
+                  >
+                    {idea.grade}
+                  </p>
+
+                  <p className="mt-2 text-xs text-slate-500">
+                    {idea.setupType}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4">
+                <div className="flex items-start gap-3">
+                  <ShieldAlert
+                    size={18}
+                    className="mt-0.5 shrink-0 text-red-400"
+                  />
+
+                  <div>
+                    <p className="text-sm font-semibold text-red-400">
+                      Risk Reminder
+                    </p>
+
+                    <p className="mt-1 text-xs leading-5 text-slate-400">
+                      Trade setups identify
+                      potential opportunities, not
+                      guarantees. Confirm the
+                      trigger and size positions
+                      appropriately.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            [
+              "Entry",
+              `${
+                isLong ? "Above" : "Below"
+              } ${formatMoney(idea.entry)}`,
+              isLong
+                ? "Wait for confirmation above resistance."
+                : "Wait for confirmation below support.",
+            ],
+            [
+              "Stop Loss",
+              formatMoney(idea.stopLoss),
+              isLong
+                ? "Invalidation below support."
+                : "Invalidation above resistance.",
+            ],
+            [
+              "Target",
+              formatMoney(idea.target),
+              isLong
+                ? "Initial upside objective."
+                : "Initial downside objective.",
+            ],
+            [
+              "Risk / Reward",
+              `1 : ${idea.riskReward.toFixed(
+                2,
+              )}`,
+              "Based on the current entry, stop, and target.",
+            ],
+          ].map(
+            ([
+              label,
+              value,
+              description,
+            ]) => (
+              <div
+                key={label}
+                className="rounded-xl border border-slate-800 bg-[#09131d] p-5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {label}
+                </p>
+
+                <p className="mt-2 text-xl font-bold text-white">
+                  {value}
+                </p>
+
+                <p className="mt-2 text-sm leading-5 text-slate-400">
+                  {description}
+                </p>
+              </div>
+            ),
+          )}
+        </section>
+
+        <section className="mb-6 grid gap-4 sm:grid-cols-3">
+          <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
+            <p className="text-xs uppercase tracking-wide text-slate-500">
+              20 SMA
+            </p>
+
+            <p className="mt-2 text-xl font-bold">
+              {idea.sma20 === null ||
+              idea.sma20 === undefined
+                ? "—"
+                : formatMoney(idea.sma20)}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
+            <p className="text-xs uppercase tracking-wide text-slate-500">
+              160 SMA
+            </p>
+
+            <p className="mt-2 text-xl font-bold">
+              {idea.sma160 === null ||
+              idea.sma160 === undefined
+                ? "—"
+                : formatMoney(idea.sma160)}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-[#09131d] p-5">
+            <p className="text-xs uppercase tracking-wide text-slate-500">
+              RSI 14
+            </p>
+
+            <p className="mt-2 text-xl font-bold">
+              {idea.rsi14 === null ||
+              !Number.isFinite(idea.rsi14)
+                ? "—"
+                : idea.rsi14.toFixed(1)}
+            </p>
+
+            {idea.rsi14 !== null &&
+              Number.isFinite(
+                idea.rsi14,
+              ) && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {idea.rsi14 >= 70
+                    ? "Overbought"
+                    : idea.rsi14 <= 30
+                      ? "Oversold"
+                      : idea.rsi14 >= 50
+                        ? "Positive momentum"
+                        : "Neutral momentum"}
+                </p>
+              )}
+          </div>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-slate-800 bg-[#09131d] p-5">
+            <div className="flex items-center gap-2">
+              <Target
+                size={18}
+                className="text-blue-400"
+              />
+
+              <h2 className="text-lg font-semibold">
+                Why This Setup Matters
+              </h2>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              {idea.whyItMatters.map(
+                (paragraph, index) => (
+                  <p
+                    key={index}
+                    className="text-sm leading-7 text-slate-400"
+                  >
+                    {paragraph}
+                  </p>
+                ),
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-[#09131d] p-5">
+            <div className="flex items-center gap-2">
+              <BarChart3
+                size={18}
+                className="text-blue-400"
+              />
+
+              <h2 className="text-lg font-semibold">
+                Trade Management Plan
+              </h2>
+            </div>
+
+            <div className="mt-4 space-y-4 text-sm text-slate-400">
+              {idea.managementPlan.map(
+                (step, index) => (
+                  <div
+                    key={index}
+                    className="flex gap-3"
+                  >
+                    <ArrowRight
+                      size={16}
+                      className="mt-0.5 shrink-0 text-blue-400"
+                    />
+
+                    <p>{step}</p>
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
+        </section>
+
+        <p className="mt-8 text-center text-xs text-slate-600">
+          Market data is supplied by Yahoo Finance
+          and may be delayed. Trade setups are
+          educational and are not financial advice.
+        </p>
+      </div>
+    </main>
+  );
 }

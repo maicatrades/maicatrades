@@ -19,7 +19,9 @@ import DashboardExtras from "../components/DashboardExtras";
 import PremiumMarketTicker from "../components/MarketTicker";
 import WhatImWatching from "../components/WhatImWatching";
 import MarketHero from "../components/MarketHero";
+import PremarketIntelligence from "../components/PremarketIntelligence";
 import Footer from "../components/Footer";
+import { fetchDashboardJson } from "@/lib/dashboard-api";
 
 type MarketScoreComponent = {
   score: number;
@@ -47,6 +49,9 @@ type MarketScoreResponse = {
   previousLabel: string | null;
   scoreChange: number | null;
   scoreTrend: MarketScoreTrend;
+  fiveDayAverage: number | null;
+  fiveDayAverageSampleSize: number;
+  fiveDayAverageDates: string[];
   components: {
     trend: MarketScoreComponent;
     momentum: MarketScoreComponent;
@@ -54,6 +59,27 @@ type MarketScoreResponse = {
     volatility: MarketScoreComponent;
   };
   updatedAt: string;
+  isFallback?: boolean;
+  fallbackMessage?: string;
+  error?: string;
+};
+
+type MarketPulseSummary = {
+  bullish: number;
+  neutral: number;
+  watch: number;
+  lowRisk: number;
+  riskSignals: number;
+  positiveBenchmarks: number;
+  negativeBenchmarks: number;
+  totalMarketBenchmarks: number;
+  averageMarketChange: number;
+  marketTone: string;
+};
+
+type MarketPulseResponse = {
+  success: boolean;
+  summary?: MarketPulseSummary;
   error?: string;
 };
 
@@ -94,6 +120,7 @@ type CalendarEvent = {
   previous: string;
   forecast: string;
   actual: string;
+  status: "Scheduled" | "Awaiting result" | "Completed";
   description: string;
 };
 
@@ -254,6 +281,16 @@ export default function DashboardPage() {
     setMarketScoreLoading,
   ] = useState(true);
 
+  const [
+    marketPulseSummary,
+    setMarketPulseSummary,
+  ] = useState<MarketPulseSummary | null>(null);
+
+  const [
+    marketPulseLoading,
+    setMarketPulseLoading,
+  ] = useState(true);
+
   const [sectorData, setSectorData] =
     useState<SectorPerformanceResponse | null>(
       null,
@@ -273,17 +310,12 @@ export default function DashboardPage() {
 
     async function fetchMarketScore() {
       try {
-        const response = await fetch(
-          "/api/market-score",
-          {
-            cache: "no-store",
-          },
-        );
+        const { data: result, ok } =
+          await fetchDashboardJson<MarketScoreResponse>(
+            "/api/market-score",
+          );
 
-        const result =
-          (await response.json()) as MarketScoreResponse;
-
-        if (!response.ok || !result.success) {
+        if (!ok || !result.success) {
           throw new Error(
             result.error ||
               "Unable to load market score",
@@ -321,19 +353,61 @@ export default function DashboardPage() {
   useEffect(() => {
     let mounted = true;
 
+    async function fetchMarketPulseSummary() {
+      try {
+        const { data: result, ok } =
+          await fetchDashboardJson<MarketPulseResponse>(
+            "/api/market-pulse",
+          );
+
+        if (!ok || !result.success) {
+          throw new Error(
+            result.error ||
+              "Unable to load market pulse",
+          );
+        }
+
+        if (mounted) {
+          setMarketPulseSummary(
+            result.summary ?? null,
+          );
+        }
+      } catch (error) {
+        console.error(
+          "Market pulse summary error:",
+          error,
+        );
+      } finally {
+        if (mounted) {
+          setMarketPulseLoading(false);
+        }
+      }
+    }
+
+    void fetchMarketPulseSummary();
+
+    const interval = window.setInterval(
+      fetchMarketPulseSummary,
+      15 * 60_000,
+    );
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
     async function fetchSectorPerformance() {
       try {
-        const response = await fetch(
-          "/api/sector-performance",
-          {
-            cache: "no-store",
-          },
-        );
+        const { data: result, ok } =
+          await fetchDashboardJson<SectorPerformanceResponse>(
+            "/api/sector-performance",
+          );
 
-        const result =
-          (await response.json()) as SectorPerformanceResponse;
-
-        if (!response.ok || !result.success) {
+        if (!ok || !result.success) {
           throw new Error(
             result.error ||
               "Unable to load sector performance",
@@ -373,17 +447,12 @@ export default function DashboardPage() {
 
     async function fetchEconomicCalendar() {
       try {
-        const response = await fetch(
-          "/api/economic-calendar",
-          {
-            cache: "no-store",
-          },
-        );
+        const { data: result, ok } =
+          await fetchDashboardJson<EconomicCalendarResponse>(
+            "/api/economic-calendar",
+          );
 
-        const result =
-          (await response.json()) as EconomicCalendarResponse;
-
-        if (!response.ok || !result.success) {
+        if (!ok || !result.success) {
           throw new Error(
             result.error ||
               "Unable to load economic calendar",
@@ -419,18 +488,13 @@ export default function DashboardPage() {
 
     async function fetchWatchlist() {
       try {
-        const response = await fetch(
-          "/api/watchlist",
-          {
-            cache: "no-store",
-          },
-        );
-
-        const result =
-          (await response.json()) as WatchlistResponse;
+        const { data: result, ok } =
+          await fetchDashboardJson<WatchlistResponse>(
+            "/api/watchlist",
+          );
 
         if (
-          !response.ok ||
+          !ok ||
           result.success === false
         ) {
           throw new Error(
@@ -505,8 +569,9 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const score = marketScore?.score ?? 0;
-  const scoreColor = getScoreColor(score);
+  const score = marketScore?.score ?? null;
+  const scoreColor =
+    score === null ? "text-slate-300" : getScoreColor(score);
 
   const leadingSector =
     sectorData?.leadingSector;
@@ -539,12 +604,22 @@ export default function DashboardPage() {
           <div className="mx-auto w-full min-w-0 max-w-[1700px] p-4 sm:p-6 lg:p-8">
             <DashboardHeader />
 
+            <div className="mb-4">
+              <PremarketIntelligence />
+            </div>
+
             <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
               <div className="min-w-0">
                 <MarketHero
                   marketScore={marketScore}
                   loading={
                     marketScoreLoading
+                  }
+                  marketPulseSummary={
+                    marketPulseSummary
+                  }
+                  marketPulseLoading={
+                    marketPulseLoading
                   }
                 />
               </div>
@@ -559,7 +634,12 @@ export default function DashboardPage() {
                   scoreColor={scoreColor}
                   marketScoreLoading={
                     marketScoreLoading
-                  }
+                  }marketPulseSummary={
+  marketPulseSummary
+}
+marketPulseLoading={
+  marketPulseLoading
+}
                   previousScore={
                     marketScore?.previousScore ??
                     null
@@ -591,8 +671,8 @@ export default function DashboardPage() {
 
             <WhatImWatching />
 
-            <section className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.4fr)]">
-              <div className="min-w-0">
+            <section className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
+              <div className="flex min-w-0 flex-col gap-4">
                 <TypedMarketPulse
                   marketScore={
                     marketScore?.score ??
@@ -610,49 +690,29 @@ export default function DashboardPage() {
                     marketScoreLoading
                   }
                 />
+                <EconomicCalendar events={calendarEvents} />
+                <div className="min-w-0 max-w-full overflow-hidden">
+                  <TradeIdea />
+                </div>
               </div>
 
-              <div className="min-w-0">
+              <div className="flex min-w-0 flex-col gap-4">
                 <MarketBreadth />
+                <MovingNow />
+                <Watchlist items={watchlistItems} />
               </div>
+            </section>
 
+            <section className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
               <div className="min-w-0">
                 <SectorPerformance
                   sectors={liveSectors}
                   loading={sectorLoading}
                 />
               </div>
-            </section>
-
-            <section className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-3">
-              <div className="min-w-0">
-                <EconomicCalendar
-                  events={
-                    calendarEvents
-                  }
-                />
-              </div>
 
               <div className="min-w-0">
                 <TopNews />
-              </div>
-
-              <div className="min-w-0">
-                <MovingNow />
-              </div>
-            </section>
-
-            <section className="mt-4 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-              <div className="min-w-0 max-w-full overflow-hidden">
-                <TradeIdea />
-              </div>
-
-              <div className="min-w-0 max-w-full overflow-hidden">
-                <Watchlist
-                  items={
-                    watchlistItems
-                  }
-                />
               </div>
             </section>
 
