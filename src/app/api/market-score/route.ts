@@ -930,6 +930,7 @@ function getBreadthAdjustment(breadthScore: number) {
 
 async function getBreadthConfirmationForDate(
   currentTradingDate: string,
+  isRegularSession: boolean,
 ): Promise<BreadthConfirmation> {
   try {
     const { data, error } = await supabaseAdmin
@@ -955,6 +956,28 @@ async function getBreadthConfirmationForDate(
           "No valid market breadth snapshot was available, so no adjustment was applied.",
         snapshot: null,
       };
+    }
+
+    // During trading hours, an old row for today must not keep capping
+    // a freshly calculated score. Breadth refreshes on a 30-minute cycle.
+    if (isRegularSession) {
+      const updatedAtMs = Date.parse(data.updated_at ?? "");
+      const ageMs = Date.now() - updatedAtMs;
+
+      if (
+        !Number.isFinite(updatedAtMs) ||
+        ageMs < -5 * 60_000 ||
+        ageMs > 90 * 60_000
+      ) {
+        return {
+          available: false,
+          adjustment: 0,
+          scoreCap: 100,
+          reason:
+            "Today's Market Breadth snapshot is stale or has no valid update time, so no breadth adjustment was applied.",
+          snapshot: null,
+        };
+      }
     }
 
     const advancingPercent = Number(data.advancing_percent);
@@ -1312,7 +1335,10 @@ export async function GET() {
       volatility.score;
 
     const breadthConfirmation =
-      await getBreadthConfirmationForDate(currentTradingDate);
+      await getBreadthConfirmationForDate(
+        currentTradingDate,
+        easternSession.isRegularSession,
+      );
 
     const adjustedScore = clamp(
       rawScore + breadthConfirmation.adjustment,
