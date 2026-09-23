@@ -427,16 +427,23 @@ async function getTickerData(
   let regularQuote: FinnhubQuote;
   let regularSource: "Finnhub" | "Yahoo Finance" = "Finnhub";
 
-  try {
-    regularQuote = await fetchFinnhubQuote(ticker);
-  } catch (error) {
-    console.warn(
-      `Finnhub quote unavailable for ${ticker.symbol}; using Yahoo regular-session fallback.`,
-      getErrorMessage(error),
-    );
-
+  if (ticker.symbol === "VIX") {
+    // Finnhub does not return a valid ^VIX quote for this account. Yahoo is
+    // the primary source for the index, so this is not a fallback failure.
     regularQuote = await fetchYahooRegularQuote(ticker);
     regularSource = "Yahoo Finance";
+  } else {
+    try {
+      regularQuote = await fetchFinnhubQuote(ticker);
+    } catch (error) {
+      console.warn(
+        `Finnhub quote unavailable for ${ticker.symbol}; using Yahoo regular-session fallback.`,
+        getErrorMessage(error),
+      );
+
+      regularQuote = await fetchYahooRegularQuote(ticker);
+      regularSource = "Yahoo Finance";
+    }
   }
 
   let yahooData: YahooExtendedData | null = null;
@@ -492,8 +499,9 @@ async function getTickerData(
       ? yahooData.price
       : null;
   const price = extendedPrice ?? regularPrice;
-  if (session === "REGULAR" && Math.abs((regularPreviousClose as number) - (regularQuote.pc as number)) > 0.01) {
-    console.warn(`Corrected stale ${ticker.symbol} prior close from daily history.`);
+  if (session === "REGULAR" && regularSource === "Finnhub" &&
+    Math.abs((regularPreviousClose as number) - (regularQuote.pc as number)) > 0.01) {
+    console.warn(`Corrected stale ${ticker.symbol} prior close using Yahoo intraday data.`);
   }
   const change = price - referenceClose;
   const changePercent = (change / referenceClose) * 100;
