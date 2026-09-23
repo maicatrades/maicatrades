@@ -38,6 +38,7 @@ type TradingPeriod = {
 type YahooChartMeta = {
   regularMarketPrice?: number;
   regularMarketTime?: number;
+  previousClose?: number;
   currency?: string;
   currentTradingPeriod?: {
     pre?: TradingPeriod;
@@ -68,6 +69,7 @@ type YahooExtendedData = {
   session: Session;
   price: number | null;
   regularMarketPrice: number | null;
+  previousClose: number | null;
   quoteTime: number | null;
   currency: string;
   sessionHigh: number | null;
@@ -78,9 +80,6 @@ type YahooExtendedData = {
 type DailyLevels = {
   previousDayHigh: number | null;
   previousDayLow: number | null;
-  previousClose: number | null;
-  completedDate: string | null;
-  precedingClose: number | null;
 };
 
 type MarketTickerItem = {
@@ -282,6 +281,9 @@ async function requestYahooExtendedData(
     regularMarketPrice: isValidNumber(meta.regularMarketPrice)
       ? meta.regularMarketPrice
       : null,
+    previousClose: isValidNumber(meta.previousClose) && meta.previousClose > 0
+      ? meta.previousClose
+      : null,
     quoteTime: latestPoint.timestamp,
     currency: meta.currency ?? "USD",
     sessionHigh:
@@ -312,27 +314,21 @@ async function requestYahooDailyLevels(
   const candles = timestamps
     .map((timestamp, index) => ({
       timestamp,
-      close: quote?.close?.[index],
       high: quote?.high?.[index],
       low: quote?.low?.[index],
     }))
     .filter(
-      (candle): candle is { timestamp: number; close: number; high: number; low: number } =>
+      (candle): candle is { timestamp: number; high: number; low: number } =>
         isValidNumber(candle.timestamp) &&
-        isValidNumber(candle.close) &&
         isValidNumber(candle.high) &&
         isValidNumber(candle.low),
     );
   // The daily chart may include a partial candle for today's session.
   const today = marketDate(Date.now() / 1000);
   const latest = candles.filter((candle) => marketDate(candle.timestamp) < today).at(-1);
-  const preceding = candles.filter((candle) => marketDate(candle.timestamp) < today).at(-2);
   return {
     previousDayHigh: latest?.high ?? null,
     previousDayLow: latest?.low ?? null,
-    previousClose: latest?.close ?? null,
-    completedDate: latest ? marketDate(latest.timestamp) : null,
-    precedingClose: preceding?.close ?? null,
   };
 }
 
@@ -447,9 +443,6 @@ async function getTickerData(
   let dailyLevels: DailyLevels = {
     previousDayHigh: null,
     previousDayLow: null,
-    previousClose: null,
-    completedDate: null,
-    precedingClose: null,
   };
 
   const [extendedResult, levelsResult] = await Promise.allSettled([
@@ -473,10 +466,15 @@ async function getTickerData(
   const regularPrice = regularQuote.c as number;
   const session = yahooData?.session ?? "REGULAR";
   const quoteDate = isValidNumber(regularQuote.t) ? marketDate(regularQuote.t) : null;
-  const completedQuoteDate = quoteDate !== null && quoteDate === dailyLevels.completedDate;
-  const regularPreviousClose = completedQuoteDate
-    ? dailyLevels.precedingClose
-    : dailyLevels.previousClose;
+  // Yahoo's intraday metadata carries the last regular close even when its
+  // daily chart has a missing close for the previous session (as on Sep 22).
+  // Match quote dates so a cached intraday response cannot supply an old close.
+  const regularPreviousClose =
+    yahooData && quoteDate !== null &&
+    isValidNumber(yahooData.quoteTime) &&
+    marketDate(yahooData.quoteTime) === quoteDate
+      ? yahooData.previousClose
+      : null;
   if (session === "REGULAR" && !isValidNumber(regularPreviousClose)) {
     throw new Error(`Unable to verify the previous regular close for ${ticker.symbol}.`);
   }
@@ -494,11 +492,7 @@ async function getTickerData(
       ? yahooData.price
       : null;
   const price = extendedPrice ?? regularPrice;
-  if (
-    session === "REGULAR" &&
-    regularPreviousClose !== null &&
-    Math.abs(regularPreviousClose - (regularQuote.pc as number)) > 0.01
-  ) {
+  if (session === "REGULAR" && Math.abs((regularPreviousClose as number) - (regularQuote.pc as number)) > 0.01) {
     console.warn(`Corrected stale ${ticker.symbol} prior close from daily history.`);
   }
   const change = price - referenceClose;
