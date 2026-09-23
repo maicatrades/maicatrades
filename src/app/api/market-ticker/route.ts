@@ -78,6 +78,9 @@ type YahooExtendedData = {
 type DailyLevels = {
   previousDayHigh: number | null;
   previousDayLow: number | null;
+  previousClose: number | null;
+  completedDate: string | null;
+  precedingClose: number | null;
 };
 
 type MarketTickerItem = {
@@ -111,6 +114,17 @@ function isValidNumber(value: unknown): value is number {
 function round(value: number, decimals = 2) {
   const multiplier = 10 ** decimals;
   return Math.round(value * multiplier) / multiplier;
+}
+
+function marketDate(timestamp: number) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp * 1000));
+  const part = (type: string) => parts.find((value) => value.type === type)?.value;
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function isWithin(timestamp: number, period?: TradingPeriod) {
@@ -298,19 +312,27 @@ async function requestYahooDailyLevels(
   const candles = timestamps
     .map((timestamp, index) => ({
       timestamp,
+      close: quote?.close?.[index],
       high: quote?.high?.[index],
       low: quote?.low?.[index],
     }))
     .filter(
-      (candle): candle is { timestamp: number; high: number; low: number } =>
+      (candle): candle is { timestamp: number; close: number; high: number; low: number } =>
         isValidNumber(candle.timestamp) &&
+        isValidNumber(candle.close) &&
         isValidNumber(candle.high) &&
         isValidNumber(candle.low),
     );
-  const latest = candles[candles.length - 1];
+  // The daily chart may include a partial candle for today's session.
+  const today = marketDate(Date.now() / 1000);
+  const latest = candles.filter((candle) => marketDate(candle.timestamp) < today).at(-1);
+  const preceding = candles.filter((candle) => marketDate(candle.timestamp) < today).at(-2);
   return {
     previousDayHigh: latest?.high ?? null,
     previousDayLow: latest?.low ?? null,
+    previousClose: latest?.close ?? null,
+    completedDate: latest ? marketDate(latest.timestamp) : null,
+    precedingClose: preceding?.close ?? null,
   };
 }
 
@@ -425,27 +447,44 @@ async function getTickerData(
   let dailyLevels: DailyLevels = {
     previousDayHigh: null,
     previousDayLow: null,
+    previousClose: null,
+    completedDate: null,
+    precedingClose: null,
   };
 
-  try {
-    [yahooData, dailyLevels] = await Promise.all([
-      fetchYahooExtendedData(ticker),
-      fetchYahooDailyLevels(ticker),
-    ]);
-  } catch (error) {
+  const [extendedResult, levelsResult] = await Promise.allSettled([
+    fetchYahooExtendedData(ticker),
+    fetchYahooDailyLevels(ticker),
+  ]);
+  if (extendedResult.status === "fulfilled") {
+    yahooData = extendedResult.value;
+  } else {
     console.warn(
       `Extended-hours data unavailable for ${ticker.symbol}; using regular-session quote.`,
-      getErrorMessage(error),
+      getErrorMessage(extendedResult.reason),
     );
+  }
+  if (levelsResult.status === "fulfilled") {
+    dailyLevels = levelsResult.value;
+  } else {
+    console.warn(`Daily levels unavailable for ${ticker.symbol}.`, getErrorMessage(levelsResult.reason));
   }
 
   const regularPrice = regularQuote.c as number;
   const session = yahooData?.session ?? "REGULAR";
+  const quoteDate = isValidNumber(regularQuote.t) ? marketDate(regularQuote.t) : null;
+  const completedQuoteDate = quoteDate !== null && quoteDate === dailyLevels.completedDate;
+  const regularPreviousClose = completedQuoteDate
+    ? dailyLevels.precedingClose
+    : dailyLevels.previousClose;
+  if (session === "REGULAR" && !isValidNumber(regularPreviousClose)) {
+    throw new Error(`Unable to verify the previous regular close for ${ticker.symbol}.`);
+  }
   // Extended-hours moves use the most recent regular close, not Finnhub's
   // prior-session reference (which would include yesterday's regular move).
-  const previousClose =
+  const referenceClose =
     session === "REGULAR"
-      ? (regularQuote.pc as number)
+      ? (regularPreviousClose as number)
       : isValidNumber(yahooData?.regularMarketPrice) &&
           yahooData.regularMarketPrice > 0
         ? yahooData.regularMarketPrice
@@ -455,21 +494,21 @@ async function getTickerData(
       ? yahooData.price
       : null;
   const price = extendedPrice ?? regularPrice;
-  const comparisonPrice = previousClose;
-  const change =
-    session === "REGULAR" && isValidNumber(regularQuote.d)
-      ? regularQuote.d
-      : price - comparisonPrice;
-  const changePercent =
-    session === "REGULAR" && isValidNumber(regularQuote.dp)
-      ? regularQuote.dp
-      : (change / comparisonPrice) * 100;
+  if (
+    session === "REGULAR" &&
+    regularPreviousClose !== null &&
+    Math.abs(regularPreviousClose - (regularQuote.pc as number)) > 0.01
+  ) {
+    console.warn(`Corrected stale ${ticker.symbol} prior close from daily history.`);
+  }
+  const change = price - referenceClose;
+  const changePercent = (change / referenceClose) * 100;
 
   return {
     symbol: ticker.symbol,
     apiSymbol: ticker.yahooSymbol,
     price: round(price),
-    previousClose: round(previousClose),
+    previousClose: round(referenceClose),
     change: round(change),
     changePercent: round(changePercent),
     regularPrice: round(regularPrice),
