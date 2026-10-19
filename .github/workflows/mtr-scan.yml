@@ -1,0 +1,54 @@
+name: MTR automatic scan and Pro publication
+
+on:
+  schedule:
+    # UTC: 11:35 PM EDT / 10:35 PM EST. Both are after the 10 PM data cutoff.
+    - cron: '35 3 * * *'
+    # Retry before the next entry window closes: 6:35 AM EDT / 5:35 AM EST.
+    - cron: '35 10 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/mtr-scan.yml'
+      - 'research/mtr/**'
+      - 'research/historical-reconstruction/frozen.mjs'
+  pull_request:
+    paths:
+      - '.github/workflows/mtr-scan.yml'
+      - 'research/mtr/**'
+      - 'research/historical-reconstruction/frozen.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mtr-research-journal
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test research/mtr/test.mjs research/mtr/automation.test.mjs
+
+  scan-and-publish:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore private journal, scan, checkpoint, and publish
+        env:
+          EODHD_API_TOKEN: ${{ secrets.EODHD_API_TOKEN }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: node research/mtr/automate.mjs run
