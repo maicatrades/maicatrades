@@ -67,7 +67,7 @@ async function main(){
   if(!process.env.NEXT_PUBLIC_SUPABASE_URL||!process.env.SUPABASE_SECRET_KEY)throw Error('Supabase credentials missing.');
   // Raw prices and source archives never reach the Pro view.
   const {rawBars,splits,...view}=payload;void rawBars;void splits;
-  const response=await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/mtr_research_log?on_conflict=id`,{method:'POST',headers:{apikey:process.env.SUPABASE_SECRET_KEY,Authorization:`Bearer ${process.env.SUPABASE_SECRET_KEY}`,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'},body:JSON.stringify({id:'MTR-1',payload:view,updated_at:new Date().toISOString()})});
+  const response=await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/mtr_research_log?on_conflict=id`,{method:'POST',headers:{apikey:process.env.SUPABASE_SECRET_KEY,...(process.env.SUPABASE_SECRET_KEY.startsWith('sb_secret_')?{}:{Authorization:`Bearer ${process.env.SUPABASE_SECRET_KEY}`}),'Content-Type':'application/json',Prefer:'resolution=merge-duplicates'},body:JSON.stringify({id:'MTR-1',payload:view,updated_at:new Date().toISOString()})});
   if(!response.ok)throw Error(`Pro publication failed: HTTP ${response.status}. Apply schema.sql first.`);console.log('Published the saved MTR journal to private Pro.');return;
  }
  if(process.argv[2]!=='scan'){console.log('Usage: node research/mtr/run.mjs scan | publish');return;}
