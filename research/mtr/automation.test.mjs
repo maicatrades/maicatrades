@@ -178,3 +178,20 @@ test('real scanner resumes after 402, refreshes unfinished SPY data, and skips r
  assert.ok(readCalls().length>count,'new completed date must fetch fresh data');
  assert.equal(JSON.parse(fs.readFileSync(path.join(mtr,'journal/ledger.json'))).lastSession,'2026-10-19');
 });
+
+for (const key of ['sb_secret_test', 'legacy-jwt-test']) test(`Supabase headers support ${key.startsWith('sb_') ? 'secret API keys' : 'legacy JWT keys'}`, async t => {
+  const original = globalThis.fetch; t.after(() => {globalThis.fetch = original;});
+  const requests = [];
+  globalThis.fetch = async (url, options) => {requests.push(options); return new Response('[]');};
+  const remote = remoteClient({NEXT_PUBLIC_SUPABASE_URL:'https://example.invalid', SUPABASE_SECRET_KEY:key});
+  await remote.readStatus(); await remote.readCheckpoint(); await remote.saveCheckpoint(Buffer.from('test'));
+  await remote.writeStatus({attemptedAt:'2026-10-25T00:00:00Z'});
+  for (const request of requests) {
+    assert.equal(request.headers.apikey, key);
+    assert.equal(request.headers.Authorization, key.startsWith('sb_secret_') ? undefined : `Bearer ${key}`);
+  }
+});
+test('restore failure exposes only controlled Supabase HTTP diagnostics', async t => {
+  const remote = memory(null); remote.readStatus = async () => {throw Error('Supabase operation failed (HTTP 401).');};
+  await assert.rejects(runAutomation({remote, dir:path.join(temp(t),'runner'), execute:async()=>{}}), /HTTP 401/);
+});
