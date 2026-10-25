@@ -48,7 +48,7 @@ export function remoteClient(env = process.env) {
   const base = env.NEXT_PUBLIC_SUPABASE_URL, key = env.SUPABASE_SECRET_KEY;
   if (!base || !key) throw Error('Supabase credentials missing.');
   if (new URL(base).protocol !== 'https:') throw Error('Supabase must use HTTPS.');
-  const headers = {apikey: key, Authorization: `Bearer ${key}`};
+  const headers = {apikey: key, ...(key.startsWith('sb_secret_') ? {} : {Authorization: `Bearer ${key}`})};
   async function request(route, options = {}, allowMissing = false) {
     let response;
     try { response = await fetch(`${base.replace(/\/$/, '')}${route}`, { ...options, headers: {...headers, ...options.headers}, signal: AbortSignal.timeout(60000), redirect: 'error'}); }
@@ -124,7 +124,8 @@ export async function runAutomation({remote, dir, execute, now = () => new Date(
       } catch { console.error('Could not checkpoint partial downloads; previous cloud journal retained where possible.'); }
     }
     // Only controlled text reaches logs or the Pro page; provider error URLs may contain secrets.
-    const detail = cause instanceof Error && /^[A-Z.]+ (eod|splits): HTTP \d{3}$/.test(cause.message) ? ` ${cause.message}.` : '';
+    const safeDetail = cause instanceof Error && (/^[A-Z.]+ (eod|splits): HTTP \d{3}$/.test(cause.message) || /^Supabase (operation failed \(HTTP \d{3}\)|request failed)\.$/.test(cause.message) || cause.message === 'Seed the existing local journal first.');
+    const detail = safeDetail ? ` ${cause.message}` : '';
     const error = `Automatic MTR ${phase} failed.${detail} Review the Actions run and setup instructions.`;
     try { await remote.writeStatus({...previous, state: 'failed', attemptedAt, runUrl, error}); }
     catch { console.error('Could not update Pro failure status. The freshness warning will detect a missing heartbeat.'); }
