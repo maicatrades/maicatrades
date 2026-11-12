@@ -1,3 +1,5 @@
+> Free collector update (November 12, 2026): see [FREE-DATA-SETUP.md](FREE-DATA-SETUP.md) for the new Twelve Data + Massive path and activation steps. The EODHD instructions below describe the retained legacy mode.
+
 # MaicaTrades Reclaim · Research
 
 MTR Research v1 and v1-P implement hypothesis 9 from the supplied

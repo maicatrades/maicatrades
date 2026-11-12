@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {pendingSessions} from './schedule.mjs';
+import {loadStoredData,storedReader} from './stored-data.mjs';
 import * as F from '../historical-reconstruction/frozen.mjs';
 import {signal,startTrade,advance,metrics,simulateAccount,entryWindowOpen,RULES,ACCOUNT} from './engine.mjs';
 const root=path.dirname(fileURLToPath(import.meta.url)), project=path.resolve(root,'../..');
@@ -71,15 +72,21 @@ async function main(){
   if(!response.ok)throw Error(`Pro publication failed: HTTP ${response.status}. Apply schema.sql first.`);console.log('Published the saved MTR journal to private Pro.');return;
  }
  if(process.argv[2]!=='scan'){console.log('Usage: node research/mtr/run.mjs scan | publish');return;}
- if(!process.env.EODHD_API_TOKEN)throw Error('Set EODHD_API_TOKEN in the environment or .env.local.');
+ const source=process.env.MTR_DATA_SOURCE??'eodhd';
+ if(!['eodhd','stored','free'].includes(source))throw Error('MTR_DATA_SOURCE must be eodhd, stored or free.');
+ if(source==='eodhd'&&!process.env.EODHD_API_TOKEN)throw Error('Set EODHD_API_TOKEN in the environment or .env.local.');
  fs.mkdirSync(dir,{recursive:true});fs.mkdirSync(lock); // Exclusive writer; second run fails safely.
  try{
+  if(fs.existsSync(path.join(dir,'collect.lock')))throw Error('MTR collector is active; retry later.');
   const ledger=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{ruleVersion:RULES.version,rules:RULES,accountAssumptions:ACCOUNT,engineHash,breadthHash,signals:[],observations:[],rawBars:{},splits:{}};
   if(ledger.engineHash!==engineHash||ledger.breadthHash!==breadthHash)throw Error('Frozen formulas changed. Start a new research version.');
   const now=current(),to=scanThrough(now);
   if(ledger.lastSession&&ledger.lastSession===to){console.log(`MTR ${to}: already frozen; journal unchanged. No provider requests.`);return;}
   const from=new Date(Math.min(Date.parse(to)-220*86400000,ledger.lastSession?Date.parse(ledger.lastSession)-100*86400000:Infinity)).toISOString().slice(0,10);
-  const cached=downloadCache(from,to),data={};
+  const collectedFile=path.join(dir,'market-data.json');
+  if(source==='free'&&!fs.existsSync(collectedFile))throw Error('Run the free collector before scanning.');
+  const collected=fs.existsSync(collectedFile)?JSON.parse(fs.readFileSync(collectedFile,'utf8')):null;
+  const cached=source!=='eodhd'?storedReader(loadStoredData({cacheDir:process.env.MTR_DATA_DIR,ledger,collected}),from,to):downloadCache(from,to),data={};
   const spyRows=await cached('eod','SPY');
   const completed=spyRows.map(b=>b.date),latest=completed.at(-1);
   if(!latest||completed.length<60||Date.now()-Date.parse(latest)>5*86400000)throw Error('Missing or stale completed daily data.');
@@ -87,7 +94,7 @@ async function main(){
   if(!pending.length){console.log(`MTR ${latest}: already frozen; journal unchanged.`);return;}
   for(const s of [...new Set(['SPY','RSP',...members])]){
    const rows=s==='SPY'?spyRows:await cached('eod',s,latest),splits=await cached('splits',s);
-   data[s]={rows,splits};await new Promise(r=>setTimeout(r,250));
+   data[s]={rows,splits};if(source==='eodhd')await new Promise(r=>setTimeout(r,250));
   }
   for(const date of pending){
   const calendar=completed.filter(d=>d<=date);
@@ -104,7 +111,7 @@ async function main(){
   // Every decision input is saved before any next-session outcome is processed.
   const capturedAt=new Date().toISOString(),eligible=entryWindowOpen(date,now);
   const candidates=members.map(s=>signal(s,normalized(data[s].rows,data[s].splits,date),calendar,breadth)).filter(Boolean);
-  if(eligible)for(const s of candidates)ledger.signals.push({...s,capturedAt,source:'EODHD completed daily / frozen breadth',inputHash:sha(JSON.stringify({bars:data[s],breadth,calendar:calendar.slice(-22)}))});
+  if(eligible)for(const s of candidates)ledger.signals.push({...s,capturedAt,source:source==='eodhd'?'EODHD completed daily / frozen breadth':source==='free'?'Twelve Data raw daily / Massive splits / frozen breadth':'Stored completed daily / frozen breadth',inputHash:sha(JSON.stringify({bars:data[s],breadth,calendar:calendar.slice(-22)}))});
   ledger.observations.push({date,capturedAt,breadth,coverage:122,candidateCount:candidates.length,loggedCount:eligible?candidates.length:0,status:eligible?'forward':'missed_entry_window',recoveredCandidates:eligible?[]:candidates,sourceHash:sha(JSON.stringify(data))});
   const archive=path.join(dir,`${date}.json`);
   // Freeze first-observed raw bars; a provider revision never silently overwrites them.

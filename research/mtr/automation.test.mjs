@@ -100,7 +100,7 @@ test('missed sessions are selected once; stale provider results cannot rewind jo
 test('real scanner catches up October 13â€“14, excludes retrospective candidates and safely repeats',t=>{
   const base=temp(t),here=path.dirname(fileURLToPath(import.meta.url)),mtr=path.join(base,'research/mtr');
   fs.mkdirSync(mtr,{recursive:true});fs.mkdirSync(path.join(base,'research/historical-reconstruction'),{recursive:true});
-  for(const name of ['run.mjs','schedule.mjs','engine.mjs'])fs.copyFileSync(path.join(here,name),path.join(mtr,name));
+  for(const name of ['run.mjs','schedule.mjs','engine.mjs','stored-data.mjs'])fs.copyFileSync(path.join(here,name),path.join(mtr,name));
   fs.copyFileSync(path.join(here,'../historical-reconstruction/frozen.mjs'),path.join(base,'research/historical-reconstruction/frozen.mjs'));
   const mock=path.join(base,'provider.mjs');
   fs.writeFileSync(mock, `
@@ -141,7 +141,7 @@ test('failed automated scan checkpoints downloads, restores them on a clean runn
 test('real scanner resumes after 402, refreshes unfinished SPY data, and skips requests after success',t=>{
  const base=temp(t),here=path.dirname(fileURLToPath(import.meta.url)),mtr=path.join(base,'research/mtr');
  fs.mkdirSync(mtr,{recursive:true});fs.mkdirSync(path.join(base,'research/historical-reconstruction'),{recursive:true});
- for(const name of ['run.mjs','schedule.mjs','engine.mjs'])fs.copyFileSync(path.join(here,name),path.join(mtr,name));
+ for(const name of ['run.mjs','schedule.mjs','engine.mjs','stored-data.mjs'])fs.copyFileSync(path.join(here,name),path.join(mtr,name));
  fs.copyFileSync(path.join(here,'../historical-reconstruction/frozen.mjs'),path.join(base,'research/historical-reconstruction/frozen.mjs'));
  const mock=path.join(base,'provider.mjs'),calls=path.join(base,'calls.jsonl');
  fs.writeFileSync(mock,`
@@ -194,4 +194,23 @@ for (const key of ['sb_secret_test', 'legacy-jwt-test']) test(`Supabase headers 
 test('restore failure exposes only controlled Supabase HTTP diagnostics', async t => {
   const remote = memory(null); remote.readStatus = async () => {throw Error('Supabase operation failed (HTTP 401).');};
   await assert.rejects(runAutomation({remote, dir:path.join(temp(t),'runner'), execute:async()=>{}}), /HTTP 401/);
+});
+
+test('free automation collects after restore, checkpoints collector files, then publishes',async t=>{
+ const base=temp(t),source=path.join(base,'source');fixture(source);const remote=memory(packJournal(source)),dir=path.join(base,'runner'),commands=[];
+ await runAutomation({remote,dir,collectData:true,execute:async command=>{
+  commands.push(command);
+  if(command==='collect')fs.writeFileSync(path.join(dir,'market-data.json'),JSON.stringify({version:1,data:{},through:'2026-10-12'}));
+  if(command==='scan')assert.ok(fs.existsSync(path.join(dir,'market-data.json')));
+ }});
+ assert.deepEqual(commands,['collect','scan','publish']);
+ const restored=path.join(base,'restored');unpackJournal(remote.checkpoint,restored);assert.ok(fs.existsSync(path.join(restored,'market-data.json')));
+});
+test('free collection failure persists partial candles without scanning or publishing',async t=>{
+ const base=temp(t),source=path.join(base,'source');fixture(source);const remote=memory(packJournal(source)),dir=path.join(base,'runner'),commands=[];
+ await assert.rejects(runAutomation({remote,dir,collectData:true,execute:async command=>{
+  commands.push(command);fs.writeFileSync(path.join(dir,'collector-cache.json'),JSON.stringify({version:1,data:{SPY:{rows:[]}}}));throw Error('Twelve Data HTTP 429');
+ }}),/collect failed/);
+ assert.deepEqual(commands,['collect']);assert.equal(remote.status.state,'failed');
+ const restored=path.join(base,'restored');unpackJournal(remote.checkpoint,restored);assert.ok(fs.existsSync(path.join(restored,'collector-cache.json')));
 });

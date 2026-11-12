@@ -9,12 +9,17 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const objectPath = 'mtr-journal/checkpoint.json.gz';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
+function safeFailure(message) {
+  if (typeof message !== 'string') return null;
+  return /^(?:[A-Z.]+ (?:eod|splits): HTTP \d{3}|(?:Twelve Data|Massive) HTTP \d{3}|[A-Z.]+: (?:cross-provider OHLC mismatch; review required|split history mismatch; review required|newly reported historical split; review required|missing completed SPY-calendar session|fewer than five overlap sessions; review required|fewer than 60 completed candles)|Collected SPY data is stale; retry will refresh SPY\.)$/.test(message) ? message : null;
+}
+
 export function packJournal(dir) {
-  if (fs.existsSync(path.join(dir, 'run.lock')) || fs.existsSync(path.join(dir, 'ledger.json.tmp')))
+  if (fs.existsSync(path.join(dir, 'collect.lock')) || fs.existsSync(path.join(dir, 'run.lock')) || fs.existsSync(path.join(dir, 'ledger.json.tmp')))
     throw Error('Journal has an active or interrupted writer. Resolve it before checkpointing.');
   const files = {};
   for (const name of fs.readdirSync(dir).sort()) {
-    if (/^(ledger|download-cache|\d{4}-\d{2}-\d{2})\.json$/.test(name))
+    if (/^(ledger|download-cache|market-data|collector-cache|\d{4}-\d{2}-\d{2})\.json$/.test(name))
       files[name] = fs.readFileSync(path.join(dir, name), 'utf8');
   }
   validateBundle({version: 1, files});
@@ -24,7 +29,7 @@ export function packJournal(dir) {
 function validateBundle(bundle) {
   if (bundle.version !== 1 || !bundle.files?.['ledger.json']) throw Error('Invalid checkpoint.');
   for (const [name, value] of Object.entries(bundle.files)) {
-    if (!/^(ledger|download-cache|\d{4}-\d{2}-\d{2})\.json$/.test(name) || typeof value !== 'string') throw Error('Unsafe checkpoint file.');
+    if (!/^(ledger|download-cache|market-data|collector-cache|\d{4}-\d{2}-\d{2})\.json$/.test(name) || typeof value !== 'string') throw Error('Unsafe checkpoint file.');
     JSON.parse(value);
   }
   const ledger = JSON.parse(bundle.files['ledger.json']);
@@ -88,7 +93,7 @@ export async function seed(remote, dir) {
   console.log('Existing journal seeded and verified. Automatic scanning is not yet activated.');
 }
 
-export async function runAutomation({remote, dir, execute, now = () => new Date().toISOString(), runUrl = null}) {
+export async function runAutomation({remote, dir, execute, now = () => new Date().toISOString(), runUrl = null, collectData = false}) {
   let previous = null, phase = 'restore';
   const attemptedAt = now();
   try {
@@ -96,6 +101,7 @@ export async function runAutomation({remote, dir, execute, now = () => new Date(
     const checkpoint = await remote.readCheckpoint();
     if (!checkpoint) throw Error('Seed the existing local journal first.');
     unpackJournal(checkpoint, dir);
+    if (collectData) { phase = 'collect'; await execute('collect'); }
     phase = 'scan';
     await execute('scan');
     const ledger = JSON.parse(fs.readFileSync(path.join(dir, 'ledger.json'), 'utf8'));
@@ -115,7 +121,7 @@ export async function runAutomation({remote, dir, execute, now = () => new Date(
   } catch (cause) {
     // Preserve validated completed downloads even when the scan fails. Never publish here.
     // packJournal refuses active/interrupted ledger writes, protecting the previous checkpoint.
-    if (phase === 'scan') {
+    if (phase === 'scan' || phase === 'collect') {
       try {
         const partial = packJournal(dir);
         await remote.saveCheckpoint(partial);
@@ -124,7 +130,11 @@ export async function runAutomation({remote, dir, execute, now = () => new Date(
       } catch { console.error('Could not checkpoint partial downloads; previous cloud journal retained where possible.'); }
     }
     // Only controlled text reaches logs or the Pro page; provider error URLs may contain secrets.
-    const safeDetail = cause instanceof Error && (/^[A-Z.]+ (eod|splits): HTTP \d{3}$/.test(cause.message) || /^Supabase (operation failed \(HTTP \d{3}\)|request failed)\.$/.test(cause.message) || cause.message === 'Seed the existing local journal first.');
+    const safeDetail = cause instanceof Error && (
+      safeFailure(cause.message) ||
+      /^Supabase (operation failed\s*\(HTTP \d{3}\)|request failed)\.$/.test(cause.message) ||
+      cause.message === 'Seed the existing local journal first.'
+    );
     const detail = safeDetail ? ` ${cause.message}` : '';
     const error = `Automatic MTR ${phase} failed.${detail} Review the Actions run and setup instructions.`;
     try { await remote.writeStatus({...previous, state: 'failed', attemptedAt, runUrl, error}); }
@@ -137,24 +147,25 @@ async function main() {
   const project = path.resolve(root, '../..');
   const envFile = path.join(project, '.env.local');
   if (fs.existsSync(envFile)) for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^(EODHD_API_TOKEN|NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SECRET_KEY)=(.*)$/);
+    const match = line.match(/^(EODHD_API_TOKEN|TWELVEDATA_API_KEY|MASSIVE_API_KEY|NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SECRET_KEY)=(.*)$/);
     if (match && !process.env[match[1]]) process.env[match[1]] = match[2].trim().replace(/^(['"])(.*)\1$/, '$2');
   }
   const command = process.argv[2], dir = path.join(root, 'journal');
   if (!['seed', 'run'].includes(command)) throw Error('Usage: node research/mtr/automate.mjs seed | run');
   const remote = remoteClient();
   if (command === 'seed') return seed(remote, dir);
-  if (!process.env.EODHD_API_TOKEN) throw Error('EODHD_API_TOKEN missing.');
+  if ((process.env.MTR_DATA_SOURCE??'eodhd') === 'eodhd' && !process.env.EODHD_API_TOKEN) throw Error('EODHD_API_TOKEN missing.');
+  if (process.env.MTR_DATA_SOURCE === 'free' && (!process.env.TWELVEDATA_API_KEY || !process.env.MASSIVE_API_KEY)) throw Error('Free collector keys missing.');
   const execute = command => {
-    const result = spawnSync(process.execPath, [path.join(root, 'run.mjs'), command], {cwd: project, encoding: 'utf8', timeout: 25 * 60000, maxBuffer: 1024 * 1024});
+    const result = spawnSync(process.execPath, [path.join(root, command === 'collect' ? 'collect.mjs' : 'run.mjs'), ...(command === 'collect' ? [] : [command])], {cwd: project, encoding: 'utf8', timeout: 30 * 60000, maxBuffer: 1024 * 1024});
     // Child output is not relayed: successful summaries are reported by this wrapper.
     if (result.status !== 0 || result.error) {
       const safe = result.stderr?.trim();
-      throw Error(/^[A-Z.]+ (eod|splits): HTTP \d{3}$/.test(safe) ? safe : `MTR ${command} failed.`);
+      throw Error(safeFailure(safe) ?? `MTR ${command} failed.`);
     }
   };
   const runUrl = process.env.GITHUB_ACTIONS === 'true' ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : null;
-  await runAutomation({remote, dir, execute, runUrl});
+  await runAutomation({remote, dir, execute, runUrl, collectData: process.env.MTR_DATA_SOURCE === 'free'});
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
