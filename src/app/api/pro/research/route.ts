@@ -1,3 +1,5 @@
+import { previousTradingDate } from "@/lib/market-session";
+import { validScore } from "@/lib/score-history";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { createClient } from "@/lib/supabase/server";
@@ -121,7 +123,7 @@ function buildOutcomes(
   return rows.flatMap((row) => {
     const startIndex = indexByDate.get(row.trading_date);
     const score = Number(row.market_score);
-    if (startIndex == null || !Number.isFinite(score)) return [];
+    if (startIndex == null || !validScore(score)) return [];
     const start = prices[startIndex]?.close;
     if (!start) return [];
     const returns: Partial<Record<Horizon, number>> = {};
@@ -180,7 +182,7 @@ function buildConditionRows(
     const breadthValue = Number(
       breadthByDate.get(row.trading_date)?.breadth_score,
     );
-    if (!Number.isFinite(score)) return [];
+    if (!validScore(score)) return [];
     const breadth = Number.isFinite(breadthValue) ? breadthValue : null;
     const scoreLabel = scoreBand(score);
     const breadthLabel = breadthBand(breadth);
@@ -199,7 +201,7 @@ function buildConditionRows(
 
 function buildEpisodes(rows: ConditionRow[]): ConditionRow[] {
   return rows.filter(
-    (row, index) => index === 0 || row.state !== rows[index - 1]?.state,
+    (row, index) => index === 0 || row.state !== rows[index - 1]?.state || previousTradingDate(row.date) !== rows[index - 1]?.date,
   );
 }
 
@@ -234,20 +236,23 @@ function posture(scoreLabel: string, breadthLabel: string) {
 function transitionTracker(rows: ConditionRow[]) {
   const current = rows.at(-1) ?? null;
   const previous = rows.at(-2) ?? null;
-  const fiveSessionsAgo = rows.at(-6) ?? rows[0] ?? null;
+  const recentSix = rows.slice(-6);
+  const contiguous = recentSix.length === 6 && recentSix.slice(1).every((row,index) => previousTradingDate(row.date) === recentSix[index].date);
+  const fiveSessionsAgo = contiguous ? recentSix[0] : null;
   if (!current) return null;
 
   let consecutiveSessions = 1;
   for (let index = rows.length - 2; index >= 0; index -= 1) {
-    if (rows[index]?.state !== current.state) break;
+    if (rows[index]?.state !== current.state || previousTradingDate(rows[index+1].date) !== rows[index].date) break;
     consecutiveSessions += 1;
   }
 
-  const scoreChange1D = previous
+  const adjacent = previous && previousTradingDate(current.date) === previous.date;
+  const scoreChange1D = adjacent
     ? round(current.score - previous.score, 1)
     : null;
   const breadthChange1D =
-    previous && current.breadth != null && previous.breadth != null
+    adjacent && current.breadth != null && previous.breadth != null
       ? round(current.breadth - previous.breadth, 1)
       : null;
   const scoreChange5D = fiveSessionsAgo
@@ -269,6 +274,7 @@ function transitionTracker(rows: ConditionRow[]) {
       ? 0
       : Math.sign(breadthChange5D);
   const direction =
+    scoreChange5D == null && breadthChange5D == null ? "Insufficient consecutive history" :
     scoreDirection < 0 && breadthDirection < 0
       ? "Deteriorating"
       : scoreDirection > 0 && breadthDirection > 0
@@ -343,12 +349,13 @@ export async function GET() {
       supabaseAdmin
         .from("market_score_history")
         .select("trading_date, market_score, market_label, snapshot_status")
-        .order("trading_date", { ascending: true })
+        .eq("snapshot_status", "final")
+        .order("trading_date", { ascending: false })
         .limit(250),
       supabaseAdmin
         .from("market_breadth_history")
         .select("trading_date, breadth_score, breadth_label")
-        .order("trading_date", { ascending: true })
+        .order("trading_date", { ascending: false })
         .limit(250),
       Promise.all(
         SYMBOLS.map(
@@ -358,8 +365,8 @@ export async function GET() {
     ]);
     if (scoreError) throw scoreError;
     if (breadthError) throw breadthError;
-    const scores = (scoreRows ?? []) as ScoreRow[];
-    const breadth = (breadthRows ?? []) as BreadthRow[];
+    const scores = ((scoreRows ?? []) as ScoreRow[]).filter(row => row.market_score != null && validScore(Number(row.market_score))).reverse();
+    const breadth = ((breadthRows ?? []) as BreadthRow[]).reverse();
     const breadthByDate = new Map(
       breadth.map((row) => [row.trading_date, row]),
     );
@@ -440,12 +447,10 @@ export async function GET() {
       tickers.SPY?.currentEpisodes?.[5]?.sampleSize ?? 0;
     const confidence =
       episodeFiveDaySamples >= 30
-        ? "High"
-        : episodeFiveDaySamples >= 10
-          ? "Moderate"
-          : episodeFiveDaySamples > 0
-            ? "Very Low"
-            : "Unavailable";
+        ? "Descriptive sample (not validated prediction)"
+        : episodeFiveDaySamples >= 20
+          ? "Limited sample"
+          : "Insufficient evidence (<20 observations)";
     return NextResponse.json(
       {
         success: true,
@@ -453,6 +458,7 @@ export async function GET() {
           "Close-to-close forward returns using the next 5, 10, and 20 available trading sessions. Incomplete horizons are excluded.",
         history: {
           recordCount: scores.length,
+          selection: "Latest 250 finalized sessions, displayed chronologically",
           breadthRecordCount: breadth.length,
           firstDate: scores[0]?.trading_date ?? null,
           lastDate: latest?.trading_date ?? null,

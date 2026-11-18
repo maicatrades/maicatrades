@@ -230,7 +230,7 @@ function getPremarketApproach(
   tone: "Risk-On" | "Risk-Off" | "Mixed" | null,
 ) {
   if (tone === "Risk-Off") {
-    return "Buyers controlled the previous regular session. Premarket index weakness suggests patience, smaller initial risk, and confirmation after the open.";
+    return "Premarket index weakness suggests patience, smaller initial risk, and confirmation after the open.";
   }
 
   if (tone === "Risk-On") {

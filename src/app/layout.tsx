@@ -1,4 +1,5 @@
 import "./globals.css";
+import ReadOnlyPreviewNotice from "./components/ReadOnlyPreviewNotice";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -89,7 +90,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body><ReadOnlyPreviewNotice />{children}</body>
     </html>
   );
 }

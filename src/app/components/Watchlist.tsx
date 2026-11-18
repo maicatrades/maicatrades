@@ -140,6 +140,7 @@ export default function Watchlist({
         <CardTitle icon={ListChecks}>
           My Watchlist
         </CardTitle>
+        <p className="px-4 pt-3 text-xs text-slate-400">Multi-day SMA20/SMA160 setup status. Pulse measures session direction with EMA20/EMA50, so labels can differ.</p>
 
         <div className="overflow-x-auto p-4">
           {items.length === 0 ? (

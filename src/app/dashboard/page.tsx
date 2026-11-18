@@ -15,7 +15,7 @@ import TradeIdea from "../components/TradeIdea";
 import Watchlist from "../components/Watchlist";
 import MarketPulse from "../components/MarketPulse";
 import DashboardHeader from "../components/DashboardHeader";
-import DashboardExtras from "../components/DashboardExtras";
+import MarketDefinitions from "../components/MarketDefinitions";
 import PremiumMarketTicker from "../components/MarketTicker";
 import WhatImWatching from "../components/WhatImWatching";
 import MarketHero from "../components/MarketHero";
@@ -38,6 +38,7 @@ type MarketScoreResponse = {
   success: boolean;
   score: number;
   rawScore: number;
+  scoreAsOf?: string;
   label: string;
   environment: {
     bias: string;
@@ -84,6 +85,7 @@ type MarketPulseResponse = {
 };
 
 type MarketPulseComponentProps = {
+  marketScoreAsOf?: string | null;
   marketScore?: number | null;
   marketLabel?: string | null;
   scoreTrend?: MarketScoreTrend;
@@ -674,6 +676,7 @@ marketPulseLoading={
             <section className="mt-4 grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
               <div className="flex min-w-0 flex-col gap-4">
                 <TypedMarketPulse
+                  marketScoreAsOf={marketScore?.scoreAsOf ?? null}
                   marketScore={
                     marketScore?.score ??
                     null
@@ -716,9 +719,7 @@ marketPulseLoading={
               </div>
             </section>
 
-            <DashboardExtras
-              marketScore={score}
-            />
+            <MarketDefinitions />
 
             <Footer />
           </div>

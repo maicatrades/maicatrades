@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { formatContextTime } from "@/lib/market-display-context";
 import { Activity, Gauge } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import MarketOutlook from "./MarketOutlook";
@@ -27,6 +28,10 @@ type MarketScoreResponse = {
     sectorStrength: MarketScoreComponent;
     volatility: MarketScoreComponent;
   };
+  breadthConfirmation?: {available: boolean; snapshot?: {score: number; updatedAt?: string | null; tradingDate?: string} | null};
+  explanation?: string;
+  snapshotStatus?: string;
+  scoreAsOf?: string;
   fiveDayAverage: number | null;
   fiveDayAverageSampleSize: number;
   fiveDayAverageDates: string[];
@@ -208,13 +213,13 @@ export default function MarketHero({
           View details →
         </div>
 
-        <div className="relative grid min-h-[390px] gap-8 p-6 sm:p-8 lg:grid-cols-[260px_1fr]">
+        <div className="relative grid items-start gap-6 p-6 sm:p-8 lg:grid-cols-[260px_minmax(0,1fr)]">
           <div className="flex flex-col items-center justify-center">
             <div className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.15em] text-blue-400">
               <Gauge size={18} />
               {isPremarket
                 ? "Latest Market Score"
-                : "Today’s Market Score"}
+                : "Market Backdrop Score"}
             </div>
 
             <PremiumMarketScoreGauge
@@ -226,9 +231,25 @@ export default function MarketHero({
                   ? "Latest verified stored snapshot"
                   : isPremarket
                   ? "Previous regular-session close"
-                  : "Live market conditions"
+                  : "Multi-day backdrop"
               }
             />
+
+            {!isPremarket && !loading && !marketPulseLoading && marketPulseSummary && (
+              <div
+                className={`mt-3 rounded-lg border px-3 py-2 text-center text-xs font-semibold ${
+                  marketPulseSummary.marketTone === "Strong selling pressure" ||
+                  marketPulseSummary.marketTone === "Defensive"
+                    ? "border-red-500/30 bg-red-500/10 text-red-300"
+                    : marketPulseSummary.marketTone === "Strong buying pressure" ||
+                        marketPulseSummary.marketTone === "Constructive"
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                      : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                }`}
+              >
+                Regular-session tone: {marketPulseSummary.marketTone}
+              </div>
+            )}
 
             <div className="mt-5 flex items-center gap-3 rounded-xl border border-slate-700/80 bg-slate-950/50 px-4 py-2.5">
               <div>
@@ -261,9 +282,14 @@ export default function MarketHero({
                 ? "Score frozen until regular session"
                 : "Refreshes automatically every 5 minutes"}
             </div>
+            <p className="mt-4 max-w-[260px] text-center text-xs leading-5 text-slate-400">
+              Score as of {marketScore?.scoreAsOf ?? "unavailable"} · {marketScore?.snapshotStatus ?? "provisional"}.
+              A five-session average requires consecutive finalized history.
+            </p>
           </div>
 
-          <MarketOutlook
+          <div className="min-w-0">
+            <MarketOutlook
             marketScore={marketScore}
             loading={loading}
             marketPulseSummary={marketPulseSummary}
@@ -271,7 +297,17 @@ export default function MarketHero({
             isPremarket={isPremarket}
             premarketTone={premarketTone}
             premarketWindowOpen={premarketWindowOpen}
-          />
+            />
+            {marketScore?.explanation && (
+              <p className="mt-4 text-sm leading-6 text-slate-300">{marketScore.explanation}</p>
+            )}
+            {marketScore?.breadthConfirmation?.available && marketScore.breadthConfirmation.snapshot && (
+              <p className="mt-3 text-xs leading-5 text-slate-400">
+                Score used stored breadth {marketScore.breadthConfirmation.snapshot.score.toFixed(2)} · {formatContextTime(marketScore.breadthConfirmation.snapshot.updatedAt)}.
+                The Breadth card is calculated separately and can have a different refresh time.
+              </p>
+            )}
+          </div>
         </div>
       </section>
     </Link>

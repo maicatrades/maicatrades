@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isReadOnlyPreview } from "@/lib/read-only-preview";
 import { supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -2006,6 +2007,27 @@ export async function GET() {
   try {
     const weekKey = getTradingWeekKey();
     const existingWeeklyTrade = await getWeeklyTrade(weekKey);
+
+    if (isReadOnlyPreview()) {
+      const recorded = existingWeeklyTrade ?? await getPreviousWeeklyTrade(weekKey);
+      if (!recorded?.idea_snapshot) {
+        return NextResponse.json({success: false, hasQualifiedSetup: false,
+          hasActiveTradeIdea: false, idea: null,
+          error: "Read-only preview: no saved Trade Idea is available. Scanning and record creation are disabled.",
+          preview: {readOnly: true, storedRecord: true},
+        }, {headers: {"Cache-Control": "private, no-store, max-age=0"}});
+      }
+      return NextResponse.json({
+        success: true, hasQualifiedSetup: true,
+        hasActiveTradeIdea: ["WAITING_FOR_ENTRY", "ACTIVE", "NEEDS_REVIEW"].includes(recorded.status),
+        idea: {...recorded.idea_snapshot, qualificationFailures: []},
+        rankings: [], marketContext: recorded.market_context,
+        scan: {locked: true, message: "Read-only preview of a saved record. No scan, entry upgrade or outcome update was performed."},
+        weekly: weeklyMetadata(recorded), previousWeekly: null,
+        preview: {readOnly: true, storedRecord: true, sourceWeek: recorded.week_key, capturedAt: recorded.locked_at},
+        updatedAt: recorded.locked_at,
+      }, {headers: {"Cache-Control": "private, no-store, max-age=0"}});
+    }
 
     if (existingWeeklyTrade) {
       const lockedSeries = await loadMarketSeries(existingWeeklyTrade.symbol);
