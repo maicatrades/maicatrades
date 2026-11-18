@@ -32,6 +32,8 @@ type ScoreData = {
   success: boolean;
   score: number;
   label: string;
+  snapshotStatus?: string;
+  scoreAsOf?: string;
   fiveDayAverage: number | null;
   fiveDayAverageSampleSize: number;
   scoreChange: number | null;
@@ -40,6 +42,10 @@ type ScoreData = {
   components: Record<string, { score: number; maxScore: number }>;
   updatedAt: string;
   error?: string;
+};
+type MarketPulseData = {
+  success: boolean;
+  summary?: { marketTone: string };
 };
 type BreadthData = {
   success: boolean;
@@ -161,6 +167,7 @@ const nav = [
   ["Dashboard", LayoutDashboard],
   ["Market Intelligence", Radar],
   ["Pro Signals", Sparkles],
+  ["MTR Research", Microscope],
   ["Historical Research", FlaskConical],
   ["Sector Analysis", BarChart3],
   ["Economic Calendar", CalendarDays],
@@ -238,7 +245,7 @@ function MatrixTable({
                 return (
                   <td key={days} className="px-2 py-3 align-top">
                     <div
-                      className={`text-sm font-black ${(metric?.averageReturn ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}
+                      className={`text-sm font-black ${(metric?.sampleSize ?? 0) < 30 ? "text-slate-300" : (metric?.averageReturn ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}
                     >
                       {metric?.sampleSize
                         ? signed(metric.averageReturn, "%")
@@ -270,6 +277,7 @@ function MatrixTable({
 export default function ProPage() {
   const [mobileNav, setMobileNav] = useState(false);
   const [score, setScore] = useState<ScoreData | null>(null);
+  const [sessionTone, setSessionTone] = useState<string | null>(null);
   const [breadth, setBreadth] = useState<BreadthData | null>(null);
   const [sectors, setSectors] = useState<SectorData | null>(null);
   const [research, setResearch] = useState<ResearchData | null>(null);
@@ -280,11 +288,12 @@ export default function ProPage() {
     let mounted = true;
     async function load() {
       try {
-        const [s, b, x, r] = await Promise.all([
+        const [s, b, x, r, p] = await Promise.all([
           fetchDashboardJson<ScoreData>("/api/market-score"),
           fetchDashboardJson<BreadthData>("/api/market-breadth"),
           fetchDashboardJson<SectorData>("/api/sector-performance"),
           fetchDashboardJson<ResearchData>("/api/pro/research", 25_000),
+          fetchDashboardJson<MarketPulseData>("/api/market-pulse"),
         ]);
         if (!s.ok || !s.data.success)
           throw new Error(s.data.error || "Market Score unavailable");
@@ -293,6 +302,7 @@ export default function ProPage() {
         setBreadth(b.ok && b.data.success ? b.data : null);
         setSectors(x.ok && x.data.success ? x.data : null);
         setResearch(r.ok && r.data.success ? r.data : null);
+        setSessionTone(p.ok && p.data.success ? p.data.summary?.marketTone ?? null : null);
         setError(null);
       } catch (e) {
         if (mounted)
@@ -427,7 +437,9 @@ export default function ProPage() {
               <a
                 key={label}
                 href={
-                  index === 0
+                  label === "MTR Research"
+                    ? "/pro/mtr"
+                    : index === 0
                     ? "#top"
                     : `#${label.toLowerCase().replaceAll(" ", "-")}`
                 }
@@ -500,7 +512,7 @@ export default function ProPage() {
             </div>
 
             <section className="grid gap-4 xl:grid-cols-[1.1fr_.8fr_1.3fr]">
-              <Card title="Market Score" icon={CircleGauge}>
+              <Card title="Market Backdrop Score" icon={CircleGauge}>
                 <div className="grid grid-cols-2 items-center gap-4 p-5">
                   <div
                     className="relative mx-auto flex h-36 w-36 items-center justify-center rounded-full p-3"
@@ -532,9 +544,18 @@ export default function ProPage() {
                       {score?.scoreTrend ?? "Loading"}
                     </p>
                     <p className="mt-1 text-xs text-zinc-500">
-                      {score?.fiveDayAverageSampleSize ?? 0} trading days
+                      {score?.fiveDayAverageSampleSize ?? 0} consecutive sessions
+                      <span className="block">{score?.scoreAsOf ?? "Date unavailable"} · {score?.snapshotStatus ?? "provisional"}</span>
                     </p>
                   </div>
+                </div>
+                <div className="border-t border-white/10 px-5 pb-5 pt-3">
+                  <p className="text-xs text-zinc-400">Multi-day backdrop · separate from today’s direction</p>
+                  {sessionTone && (
+                    <p className={`mt-2 text-sm font-bold ${sessionTone === "Strong selling pressure" || sessionTone === "Defensive" ? "text-red-400" : sessionTone === "Strong buying pressure" || sessionTone === "Constructive" ? "text-emerald-400" : "text-amber-300"}`}>
+                      Today’s session: {sessionTone}
+                    </p>
+                  )}
                 </div>
               </Card>
               <Card title="Market Regime" icon={ShieldCheck}>
@@ -548,7 +569,7 @@ export default function ProPage() {
                         key={note}
                         className="flex items-center gap-2 text-sm text-zinc-300"
                       >
-                        <CheckCircle2 size={15} className="text-emerald-400" />
+                        <Activity size={15} className="text-slate-400" />
                         {note}
                       </div>
                     ))}
@@ -736,7 +757,7 @@ export default function ProPage() {
                             {days}D expectancy
                           </p>
                           <p
-                            className={`mt-2 text-xl font-black ${(metric?.averageReturn ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}
+                            className={`mt-2 text-xl font-black ${(metric?.sampleSize ?? 0) < 30 ? "text-slate-300" : (metric?.averageReturn ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}
                           >
                             {metric?.sampleSize
                               ? signed(metric.averageReturn, "%")
@@ -935,7 +956,7 @@ export default function ProPage() {
                               return (
                                 <td key={days} className="py-4">
                                   <div
-                                    className={`text-lg font-black ${(metric?.averageReturn ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}
+                                    className={`text-lg font-black ${(metric?.sampleSize ?? 0) < 30 ? "text-slate-300" : (metric?.averageReturn ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}`}
                                   >
                                     {metric?.sampleSize
                                       ? signed(metric.averageReturn, "%")

@@ -75,6 +75,7 @@ type BenchmarkResult = {
   name: string;
   status: Status;
   price: number;
+  quoteTime: number | null;
   previousClose: number;
   change: number;
   changePercent: number;
@@ -781,6 +782,7 @@ async function fetchBenchmark(
     status,
 
     price: round(price),
+    quoteTime: intradayResult?.meta?.regularMarketTime ?? null,
     previousClose: round(previousClose),
     change: round(change),
     changePercent: round(changePercent),

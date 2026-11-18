@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { equalWeightContext, formatContextTime, formatSessionDate, recordedBreadthBaseline } from "@/lib/market-display-context";
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -108,6 +109,7 @@ type MarketBreadthResponse = {
     percent: number;
   };
 
+  tradingDate?: string;
   updatedAt: string;
   error?: string;
 };
@@ -124,16 +126,7 @@ function formatNumber(value: number, decimals = 0) {
 }
 
 function formatUpdatedTime(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Recently updated";
-  }
-
-  return `Updated ${date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
+  return `Calculated ${formatContextTime(value)}`;
 }
 
 function getBreadthTheme(score: number) {
@@ -211,12 +204,7 @@ function formatTrendComparison(
     1,
   )}`;
 
-  const baseline =
-    trend.comparisonDays === 1
-      ? "previous session"
-      : trend.comparisonDays >= 5
-        ? "5-day average"
-        : `${trend.comparisonDays}-day average`;
+  const baseline = recordedBreadthBaseline(trend.comparisonDays);
 
   return `${difference} points vs ${baseline}.`;
 }
@@ -657,11 +645,12 @@ export default function MarketBreadth() {
             />
 
             <Metric
-              label="Broad Sectors"
+              label="M122 sector groups"
               value={`${data.sectors.positive}/${data.sectors.total}`}
             />
           </div>
 
+          <p className="mt-2 text-[11px] leading-4 text-slate-400">Sector groups count as positive when more than 50% of their M122 members advance. This differs from sector ETF price changes.</p>
           <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 px-3 py-3">
             <div className="mb-1 flex items-center justify-between">
               <div className="flex items-center gap-1.5">
@@ -708,17 +697,18 @@ export default function MarketBreadth() {
 
             <div className="flex min-h-[82px] flex-col items-center justify-center rounded-lg border border-slate-800 bg-slate-950/25 px-3 py-3 text-center">
               <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                Equal weight
+                RSP versus SPY
               </p>
 
               <p className="mt-1 text-xs font-semibold leading-5 text-slate-300">
-                {data.relativePerformance?.signal ??
-                  "Signal unavailable"}
+                {equalWeightContext(data.relativePerformance)}
               </p>
+              <p className="mt-1 text-[10px] leading-4 text-slate-400">Relative performance, not overall market breadth.</p>
             </div>
           </div>
 
-          <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3 text-[10px] text-slate-600">
+          <p className="mt-4 text-xs text-slate-400">Daily-bar participation · {formatSessionDate(data.tradingDate)}</p>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-[10px] text-slate-400">
             <span>
               Coverage: {data.coverage.returned}/
               {data.coverage.requested} stocks

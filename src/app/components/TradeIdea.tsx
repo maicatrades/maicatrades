@@ -1,5 +1,6 @@
 "use client";
 
+import { tradePrefillUrl } from "@/lib/trade-prefill";
 import { useRouter } from "next/navigation";
 import { fetchDashboardJson } from "@/lib/dashboard-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -56,6 +57,7 @@ type TradeIdeaResponse = {
     stoppedOutAt?: string | null;
     outcomeNote?: string | null;
   };
+  preview?: {readOnly: boolean; storedRecord?: boolean; sourceWeek?: string; capturedAt?: string};
   updatedAt?: string;
   error?: string;
 };
@@ -461,7 +463,7 @@ export default function TradeIdea() {
             aria-label="Refresh trade idea outcome"
           >
             <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
-            {refreshing ? "Refreshing" : "15 min delayed"}
+            {refreshing ? "Refreshing" : data?.preview?.readOnly ? "Recorded snapshot" : "15 min delayed"}
           </button>
         </div>
 
@@ -477,7 +479,7 @@ export default function TradeIdea() {
               </div>
 
               <div className="text-right">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Current price</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{data?.preview?.readOnly ? "Recorded price" : "Current price"}</p>
                 <p className="mt-1 text-2xl font-semibold text-white">{formatMoney(idea.price)}</p>
               </div>
             </div>
@@ -534,10 +536,15 @@ export default function TradeIdea() {
 
           {refreshing
             ? "Refreshing"
-            : "15 min delayed"}
+            : data?.preview?.readOnly ? "Recorded snapshot" : "15 min delayed"}
         </button>
       </div>
 
+      {data?.preview?.readOnly && (
+        <p className="border-b border-amber-500/20 bg-amber-500/5 px-5 py-2 text-xs text-amber-200">
+          Read-only preview · Saved idea for week {data.preview.sourceWeek ?? "unavailable"}. Price and status are recorded values; lifecycle checks are paused.
+        </p>
+      )}
       {error && (
         <div className="border-b border-amber-500/20 bg-amber-500/5 px-5 py-2.5 text-xs text-amber-300">
           Refresh failed. Displaying the last
@@ -560,7 +567,7 @@ export default function TradeIdea() {
 
             <div className="shrink-0 text-right">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                Current price
+                {data?.preview?.readOnly ? "Recorded price" : "Current price"}
               </p>
 
               <p className="text-2xl font-semibold text-white">
@@ -734,11 +741,11 @@ export default function TradeIdea() {
 
           <div>
             <p className="text-[10px] font-semibold uppercase text-slate-400">
-              Confidence
+              Setup heuristic (unvalidated)
             </p>
 
             <p className="mt-1 text-sm font-semibold text-white">
-              {idea.confidenceScore}/100
+              {idea.confidenceScore}/96
             </p>
 
             <div className="mt-1 flex text-yellow-400">
@@ -767,10 +774,9 @@ export default function TradeIdea() {
         </div>
       </div>
 
-      <div className="border-t border-slate-800 px-5 py-4">
-        <span className="inline-flex items-center text-sm font-medium text-blue-400 transition group-hover:text-blue-300">
-          View Full Trade Breakdown →
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 px-5 py-4">
+        <span className="inline-flex items-center text-sm font-medium text-blue-400 transition group-hover:text-blue-300">View Full Trade Breakdown →</span>
+        <button type="button" onClick={event => {event.stopPropagation();router.push(tradePrefillUrl(idea, weekly?.status));}} onKeyDown={event => event.stopPropagation()} className="rounded-lg border border-blue-400/40 px-3 py-2 text-sm text-blue-300 focus-visible:outline focus-visible:outline-2">Calculate My Position</button>
       </div>
     </Card>
   );

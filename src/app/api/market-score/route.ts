@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
+import { isReadOnlyPreview } from "@/lib/read-only-preview";
 import { supabaseAdmin } from "@/lib/supabase";
+import { explainBackdrop } from "@/lib/market-explanation";
+import { marketSession } from "@/lib/market-session";
+import { rollingScoreWindow, writeScoreSnapshot, validScore } from "@/lib/score-history";
 export const dynamic = "force-dynamic";
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -37,6 +41,11 @@ type YahooQuote = {
 
 type YahooMeta = {
   regularMarketPrice?: number;
+  regularMarketTime?: number;
+  previousClose?: number;
+  currentTradingPeriod?: {
+    regular?: { start?: number; end?: number };
+  };
   currency?: string;
   marketState?: string;
 };
@@ -160,36 +169,14 @@ type RawMarketData = {
   marketState: string;
 };
 
-function getEasternSession(now = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(now);
+type IntradayQuote = {
+  quoteDate: string;
+  price: number;
+  previousClose: number;
+  regularSessionVerified: boolean;
+};
 
-  const values = Object.fromEntries(
-    parts.map((part) => [part.type, part.value]),
-  );
-
-  const tradingDate =
-    `${values.year}-${values.month}-${values.day}`;
-  const minutes = Number(values.hour) * 60 + Number(values.minute);
-  const weekday = values.weekday;
-  const isWeekday = weekday !== "Sat" && weekday !== "Sun";
-
-  return {
-    tradingDate,
-    minutes,
-    isWeekday,
-    isRegularSession:
-      isWeekday && minutes >= 9 * 60 + 30 && minutes < 16 * 60,
-  };
-}
+const getEasternSession = marketSession;
 
 function getEasternTradingDate(timestampSeconds: number) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -300,6 +287,59 @@ async function fetchWithTimeout(
   }
 }
 
+async function requestYahooIntraday(
+  host: YahooHost,
+  symbol: string,
+): Promise<IntradayQuote> {
+  const url =
+    `https://${host}.finance.yahoo.com/v8/finance/chart/` +
+    `${encodeURIComponent(symbol)}?interval=5m&range=1d&includePrePost=false`;
+  const response = await fetchWithTimeout(url, {
+    next: { revalidate: DATA_CACHE_SECONDS },
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Yahoo ${host} intraday HTTP ${response.status} for ${symbol}.`);
+  }
+  const json = (await response.json()) as YahooResponse;
+  const result = json.chart?.result?.[0];
+  const meta = result?.meta;
+  const quoteTime = meta?.regularMarketTime;
+  if (
+    json.chart?.error ||
+    !isValidNumber(quoteTime) ||
+    !isValidNumber(meta?.regularMarketPrice) || meta.regularMarketPrice <= 0 ||
+    !isValidNumber(meta?.previousClose) || meta.previousClose <= 0
+  ) {
+    throw new Error(`Yahoo returned incomplete intraday data for ${symbol}.`);
+  }
+  const regular = meta.currentTradingPeriod?.regular;
+  const easternSession = getEasternSession();
+  return {
+    quoteDate: getEasternTradingDate(quoteTime),
+    price: meta.regularMarketPrice,
+    previousClose: meta.previousClose,
+    regularSessionVerified:
+      easternSession.isRegularSession &&
+      getEasternTradingDate(quoteTime) === easternSession.tradingDate &&
+      isValidNumber(regular?.start) &&
+      isValidNumber(regular?.end) &&
+      quoteTime >= regular.start && quoteTime <= regular.end &&
+      Date.now() / 1000 - quoteTime < 30 * 60,
+  };
+}
+
+async function fetchYahooIntraday(symbol: string): Promise<IntradayQuote> {
+  try {
+    return await requestYahooIntraday("query1", symbol);
+  } catch {
+    return requestYahooIntraday("query2", symbol);
+  }
+}
+
 async function requestYahooData(
   host: YahooHost,
   symbol: string,
@@ -366,11 +406,43 @@ async function requestYahooData(
 
   const timestamps = result.timestamp ?? [];
 
+  if (timestamps.length < 2) {
+    throw new Error(`Yahoo returned insufficient dated closes for ${symbol}.`);
+  }
+
+  const latestDatedIndex = timestamps.length - 1;
+  const latestDailyDate = getEasternTradingDate(timestamps[latestDatedIndex]);
+  const priorIndex = latestDatedIndex - 1;
+  const missingPriorClose =
+    priorIndex >= 0 &&
+    !isValidNumber(rawCloses[priorIndex]);
+  let intraday: IntradayQuote | null = null;
+  try {
+    intraday = await fetchYahooIntraday(symbol);
+  } catch (error) {
+    if (missingPriorClose) {
+      throw new Error(
+        `Cannot repair the missing previous close for ${symbol}: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+  if (missingPriorClose) {
+    if (
+      !intraday ||
+      intraday.quoteDate !== latestDailyDate ||
+      !isValidNumber(timestamps[priorIndex]) ||
+      getEasternTradingDate(timestamps[priorIndex]) >= latestDailyDate
+    ) {
+      throw new Error(`Cannot date the missing previous close for ${symbol}.`);
+    }
+    rawCloses[priorIndex] = intraday.previousClose;
+  }
+
   const validPoints = rawCloses
     .map((close, index) => {
       const timestamp = timestamps[index];
 
-      if (!isValidNumber(close) || !isValidNumber(timestamp)) {
+      if (!isValidNumber(close) || close <= 0 || !isValidNumber(timestamp)) {
         return null;
       }
 
@@ -396,7 +468,9 @@ async function requestYahooData(
 
   const regularMarketPrice = result.meta?.regularMarketPrice;
 
-  const price = isValidNumber(regularMarketPrice)
+  const price = intraday?.regularSessionVerified
+    ? intraday.price
+    : isValidNumber(regularMarketPrice)
     ? regularMarketPrice
     : latestClose;
 
@@ -412,7 +486,9 @@ async function requestYahooData(
       tradingDate: getEasternTradingDate(point.timestamp),
     })),
     currency: result.meta?.currency ?? "USD",
-    marketState: result.meta?.marketState ?? "UNKNOWN",
+    marketState: intraday?.regularSessionVerified
+      ? "REGULAR"
+      : result.meta?.marketState ?? "UNKNOWN",
   };
 }
 
@@ -947,7 +1023,7 @@ async function getBreadthConfirmationForDate(
 
     const breadthScore = Number(data?.breadth_score);
 
-    if (!data || !Number.isFinite(breadthScore)) {
+    if (!data || data.breadth_score == null || !validScore(breadthScore)) {
       return {
         available: false,
         adjustment: 0,
@@ -1100,13 +1176,14 @@ function getEnvironment(score: number) {
   };
 }
 
-async function getStoredMarketScoreFallback() {
+async function getStoredMarketScoreFallback(expectedDate?: string) {
   try {
     const { data, error } = await supabaseAdmin
       .from("market_score_history")
       .select(
-        "trading_date, market_score, market_label, raw_score, market_bias, risk_level, approach, trend_score, trend_max_score, momentum_score, momentum_max_score, sector_strength_score, sector_strength_max_score, volatility_score, volatility_max_score, captured_at, updated_at",
+        "trading_date, market_score, market_label, raw_score, market_bias, risk_level, approach, trend_score, trend_max_score, momentum_score, momentum_max_score, sector_strength_score, sector_strength_max_score, volatility_score, volatility_max_score, breadth_score, breadth_trading_date, captured_at, updated_at",
       )
+      .eq("snapshot_status", "final")
       .order("trading_date", { ascending: false })
       .limit(5);
 
@@ -1119,9 +1196,10 @@ async function getStoredMarketScoreFallback() {
     }
 
     const current = data[0];
+    if (expectedDate && current.trading_date !== expectedDate) return null;
     const score = Number(current.market_score);
 
-    if (!Number.isFinite(score)) {
+    if (current.market_score == null || !validScore(score)) {
       return null;
     }
 
@@ -1135,13 +1213,8 @@ async function getStoredMarketScoreFallback() {
         : null;
     const scoreChange =
       validPreviousScore === null ? null : score - validPreviousScore;
-    const storedScores = data
-      .map((row) => Number(row.market_score))
-      .filter(Number.isFinite);
-    const fiveDayAverage =
-      storedScores.length === 5
-        ? round(average(storedScores), 1)
-        : null;
+    const rolling = rollingScoreWindow(data.map(row => ({tradingDate: String(row.trading_date), score: row.market_score == null ? null : Number(row.market_score)})));
+    const fiveDayAverage = rolling.average;
 
     return {
       score,
@@ -1160,8 +1233,11 @@ async function getStoredMarketScoreFallback() {
       scoreChange,
       scoreTrend: getScoreTrend(scoreChange),
       fiveDayAverage,
-      fiveDayAverageSampleSize: storedScores.length,
-      fiveDayAverageDates: data.map((row) => String(row.trading_date)),
+      fiveDayAverageSampleSize: rolling.sampleSize,
+      fiveDayAverageDates: rolling.dates,
+      explanation: explainBackdrop(score, current.breadth_score == null ? null : Number(current.breadth_score), current.breadth_trading_date === current.trading_date),
+      snapshotStatus: "final",
+      scoreAsOf: String(current.trading_date),
       components: {
         trend: {
           score: Number(current.trend_score),
@@ -1186,7 +1262,7 @@ async function getStoredMarketScoreFallback() {
       },
       isFallback: true,
       fallbackMessage:
-        "Showing the latest verified Market Score snapshot while live providers reconnect.",
+        "Showing the latest finalized recorded snapshot. It may be older than the latest completed session.",
       updatedAt:
         current.updated_at ??
         current.captured_at ??
@@ -1204,6 +1280,13 @@ async function getStoredMarketScoreFallback() {
 
 export async function GET() {
   try {
+    const session = marketSession();
+    if (!session.isRegularSession && session.completedDate) {
+      const finalized = await getStoredMarketScoreFallback(session.completedDate);
+      if (finalized) return NextResponse.json({ success: true, ...finalized, isFallback: false,
+        fallbackMessage: undefined, dataQuality: {...finalized.dataQuality, status: "stored-final"}, source: "Finalized session snapshot" },
+        { headers: { "Cache-Control": "no-store, max-age=0" } });
+    }
     const requestedSymbols = [
       SYMBOLS.spy,
       SYMBOLS.qqq,
@@ -1239,7 +1322,7 @@ export async function GET() {
     const easternSession = getEasternSession();
     const acceptCurrentDate =
       easternSession.isRegularSession ||
-      (easternSession.isWeekday && easternSession.minutes >= 16 * 60);
+      (easternSession.isWeekday && easternSession.minutes >= easternSession.closeMinutes);
     const eligibleSpyPoints = rawSpy.points.filter((point) => {
       if (point.tradingDate < easternSession.tradingDate) {
         return true;
@@ -1361,6 +1444,7 @@ export async function GET() {
       } = await supabaseAdmin
         .from("market_score_history")
         .select("trading_date, market_score, market_label")
+        .eq("snapshot_status", "final")
         .lt("trading_date", currentTradingDate)
         .order("trading_date", { ascending: false })
         .limit(1)
@@ -1376,7 +1460,7 @@ export async function GET() {
           previousScoreRow.market_score,
         );
 
-        if (Number.isFinite(storedPreviousScore)) {
+        if (previousScoreRow.market_score != null && validScore(storedPreviousScore)) {
           previousScore = storedPreviousScore;
           previousTradingDate =
             previousScoreRow.trading_date ?? null;
@@ -1404,6 +1488,7 @@ export async function GET() {
         await supabaseAdmin
           .from("market_score_history")
           .select("trading_date, market_score")
+          .eq("snapshot_status", "final")
           .lt("trading_date", currentTradingDate)
           .order("trading_date", { ascending: false })
           .limit(4);
@@ -1417,7 +1502,7 @@ export async function GET() {
         const priorScores = (priorScoreRows ?? [])
           .map((row) => ({
             tradingDate: String(row.trading_date),
-            score: Number(row.market_score),
+            score: row.market_score == null ? NaN : Number(row.market_score),
           }))
           .filter((row) => Number.isFinite(row.score));
         const rollingScores = [
@@ -1425,17 +1510,10 @@ export async function GET() {
           ...priorScores,
         ].slice(0, 5);
 
-        fiveDayAverageSampleSize = rollingScores.length;
-        fiveDayAverageDates = rollingScores.map(
-          (row) => row.tradingDate,
-        );
-
-        if (rollingScores.length === 5) {
-          fiveDayAverage = round(
-            average(rollingScores.map((row) => row.score)),
-            1,
-          );
-        }
+        const rolling = rollingScoreWindow(rollingScores);
+        fiveDayAverageSampleSize = rolling.sampleSize;
+        fiveDayAverageDates = rolling.dates;
+        fiveDayAverage = rolling.average;
       }
     } catch (priorScoresError) {
       console.error(
@@ -1444,23 +1522,30 @@ export async function GET() {
       );
     }
 
+    const captureTime = new Date();
+    const closeTime = captureTime.getTime() - captureTime.getUTCSeconds()*1000 - captureTime.getUTCMilliseconds() +
+      (easternSession.closeMinutes-easternSession.minutes)*60000;
+    const breadthReadyForFinal = easternSession.isRegularSession ||
+      Date.parse(breadthConfirmation.snapshot?.updatedAt ?? "") >= closeTime;
     const shouldPersistHistory =
+      !isReadOnlyPreview() &&
+      breadthReadyForFinal &&
+      failedSymbols.length === 0 &&
+      sectors.length === SYMBOLS.sectors.length &&
+      breadthConfirmation.available &&
       currentTradingDate === easternSession.tradingDate &&
       easternSession.isWeekday &&
       (easternSession.isRegularSession ||
-        (easternSession.minutes >= 16 * 60 &&
-          easternSession.minutes < 18 * 60));
+        (easternSession.minutes >= easternSession.closeMinutes &&
+          easternSession.minutes < easternSession.closeMinutes + 120));
 
     const isFinalHistorySnapshot =
       shouldPersistHistory &&
-      easternSession.minutes >= 16 * 60;
+      easternSession.minutes >= easternSession.closeMinutes;
 
     if (shouldPersistHistory) {
       try {
-      const { error: marketScoreHistoryError } =
-        await supabaseAdmin
-          .from("market_score_history")
-          .upsert(
+      await writeScoreSnapshot(supabaseAdmin,
             {
               trading_date: currentTradingDate,
 
@@ -1506,23 +1591,20 @@ broad_sectors_total:
 
               updated_at: new Date().toISOString(),
             },
-            {
-              onConflict: "trading_date",
-            },
           );
-
-      if (marketScoreHistoryError) {
-        console.error(
-          "Unable to save Market Score history:",
-          marketScoreHistoryError,
-        );
-      }
       } catch (marketScoreHistoryError) {
         console.error(
           "Unexpected Market Score history error:",
           marketScoreHistoryError,
         );
       }
+    }
+
+    if (isFinalHistorySnapshot) {
+      const finalized = await getStoredMarketScoreFallback(currentTradingDate);
+      if (finalized) return NextResponse.json({ success: true, ...finalized, isFallback: false,
+        fallbackMessage: undefined, dataQuality: {...finalized.dataQuality, status: "stored-final"}, source: "Finalized session snapshot" },
+        {headers: {"Cache-Control": "no-store, max-age=0"}});
     }
 
     const partialData =
@@ -1532,6 +1614,9 @@ broad_sectors_total:
     return NextResponse.json(
       {
         success: true,
+        explanation: explainBackdrop(score, breadthConfirmation.snapshot?.score ?? null, breadthConfirmation.snapshot?.tradingDate === currentTradingDate),
+        snapshotStatus: "provisional",
+        scoreAsOf: currentTradingDate,
         score,
         rawScore: round(rawScore),
         breadthAdjustedScore: round(adjustedScore),
@@ -1543,9 +1628,12 @@ broad_sectors_total:
         previousLabel,
         scoreChange,
         scoreTrend,
-        fiveDayAverage,
-        fiveDayAverageSampleSize,
-        fiveDayAverageDates,
+        provisionalFiveDayAverage: fiveDayAverage,
+        provisionalFiveDayAverageSampleSize: fiveDayAverageSampleSize,
+        provisionalFiveDayAverageDates: fiveDayAverageDates,
+        fiveDayAverage: null,
+        fiveDayAverageSampleSize: 0,
+        fiveDayAverageDates: [],
         comparison: {
           currentScore: score,
           currentTradingDate,
@@ -1602,7 +1690,7 @@ broad_sectors_total:
       {
         headers: {
           "Cache-Control":
-            "public, s-maxage=300, stale-while-revalidate=600",
+            "no-store, max-age=0",
         },
       },
     );

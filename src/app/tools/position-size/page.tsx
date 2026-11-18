@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { parseTradePrefill } from "@/lib/trade-prefill";
+import { useEffect, useMemo, useState } from "react";
 
 type Direction = "long" | "short";
 
@@ -30,6 +31,13 @@ export default function PositionSizeCalculator() {
   const [loadingIdea, setLoadingIdea] = useState(false);
   const [ideaSymbol, setIdeaSymbol] = useState("");
   const [ideaError, setIdeaError] = useState("");
+  const [prefillNotice, setPrefillNotice] = useState("");
+  useEffect(() => {
+    const prefill = parseTradePrefill(new URLSearchParams(window.location.search));
+    if (!prefill) return;
+    setDirection(prefill.direction);setEntry(String(prefill.entry));setStop(String(prefill.stop));setTarget(String(prefill.target));setIdeaSymbol(prefill.symbol);
+    setPrefillNotice(`Planned levels for ${prefill.symbol}. Recorded setup status: ${prefill.status.replaceAll("_", " ")}. ${prefill.status === "WAITING_FOR_ENTRY" ? "Entry has not been recorded as triggered. " : ""}Verify the live quote, entry trigger and available buying power before acting. These are planned levels, not current-price fills.`);
+  }, []);
 
   const result = useMemo(() => {
     const accountValue = Number(account) || 0;
@@ -241,6 +249,7 @@ Risk Profile: ${result.riskProfile}
 
   return (
     <main className="min-h-screen bg-black px-6 py-10 text-white">
+      {prefillNotice && <p role="status" className="mx-auto mb-4 max-w-7xl rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">{prefillNotice}</p>}
       <div className="mx-auto max-w-6xl">
         <Link
           href="/dashboard"

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { benchmarkSessionContext, formatSessionDate } from "@/lib/market-display-context";
+import { formatEasternQuote } from "@/lib/market-session";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -36,6 +38,7 @@ type MarketPulseItem = {
   name: string;
   status: RawMarketPulseStatus;
   price: number;
+  quoteTime?: number | null;
   previousClose: number;
   change: number;
   changePercent: number;
@@ -80,6 +83,7 @@ type PremarketContext = {
 type MarketPulseProps = {
   marketScore?: number | null;
   marketLabel?: string | null;
+  marketScoreAsOf?: string | null;
   scoreTrend?: ScoreTrend | string | null;
   marketScoreLoading?: boolean;
 };
@@ -324,13 +328,14 @@ function buildDisplayItem(
   return {
     ...item,
     displayStatus: display.status,
-    displayDescription: display.description,
+    displayDescription: item.symbol === "VIX" ? display.description : benchmarkSessionContext(item.symbol, item.changePercent, marketScore),
   };
 }
 
 export default function MarketPulse({
   marketScore = null,
   marketLabel = null,
+  marketScoreAsOf = null,
   scoreTrend = "Unavailable",
   marketScoreLoading = false,
 }: MarketPulseProps) {
@@ -521,7 +526,7 @@ export default function MarketPulse({
   const contextText = marketScoreLoading
     ? "Aligning with Market Score..."
     : marketScore !== null
-      ? `Aligned with Market Score ${marketScore}${marketLabel ? ` • ${marketLabel}` : ""}`
+      ? `Backdrop reference: ${marketScore}${marketLabel ? ` • ${marketLabel}` : ""}${marketScoreAsOf ? ` · ${formatSessionDate(marketScoreAsOf)}` : ""}`
       : "Live benchmark conditions";
 
   return (
@@ -537,8 +542,11 @@ export default function MarketPulse({
 
         <div className="border-b border-slate-800 px-4 py-2 text-[11px] text-slate-500">
           {contextText}
+          <p className="mt-1">Status combines the backdrop with session direction. A positive session can coexist with a defensive backdrop.</p>
+          <p className="mt-1">Regular session versus previous regular close · Yahoo Finance. Ticker PRE/AH moves use the latest regular close.</p>
         </div>
 
+        {error && items.length > 0 && <p role="status" className="px-4 py-2 text-xs text-amber-300">Refresh failed. Showing previously loaded quotes; check their timestamps.</p>}
         {premarketContext && (
           <div className="border-b border-sky-500/20 bg-sky-500/[0.06] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -621,6 +629,7 @@ export default function MarketPulse({
                 </div>
 
                 <div className="min-w-0">
+                  <p className="mb-1 text-[10px] text-slate-400">{formatEasternQuote(item.quoteTime)}</p>
                   <p
                     className={getStatusColor(
                       item.displayStatus,
@@ -629,7 +638,7 @@ export default function MarketPulse({
                     {item.displayStatus}
                   </p>
 
-                  <p className="truncate text-xs text-slate-500">
+                  <p className="text-xs leading-5 text-slate-400">
                     {item.displayDescription}
                   </p>
                 </div>

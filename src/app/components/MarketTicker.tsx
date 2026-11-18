@@ -1,5 +1,6 @@
 "use client";
 
+import { formatEasternQuote, marketSession } from "@/lib/market-session";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -10,6 +11,9 @@ type MarketTickerItem = {
   apiSymbol: string;
   price: number | null;
   changePercent: number | null;
+  stale?: boolean;
+  quoteTime?: number | null;
+  regularSource?: string;
   session: SessionLabel;
   sessionLabel: "PRE" | "AH" | null;
 };
@@ -40,6 +44,7 @@ export default function MarketTicker() {
   );
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState("");
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [flashState, setFlashState] = useState<
     Record<string, FlashDirection>
   >({});
@@ -82,10 +87,17 @@ export default function MarketTicker() {
           }
         });
 
-        setTickerData(result.data);
+        setTickerData(tickerSymbols.map(definition => {
+          const ticker = (result.data as MarketTickerItem[]).find(item => item.symbol === definition.symbol);
+          return ticker ? {...ticker, stale: Boolean(ticker.quoteTime && marketSession().isRegularSession && Date.now()/1000-ticker.quoteTime>1200)} :
+            {...definition, price: null, changePercent: null, session: "REGULAR", sessionLabel: null, quoteTime: null};
+        }));
+        setRefreshFailed(false);
         setFlashState(nextFlashState);
         setLastUpdated(
           new Date(result.updatedAt ?? Date.now()).toLocaleTimeString("en-US", {
+            timeZone: "America/New_York",
+            timeZoneName: "short",
             hour: "numeric",
             minute: "2-digit",
             second: "2-digit",
@@ -98,6 +110,7 @@ export default function MarketTicker() {
         }, 900);
       } catch (error) {
         console.error("Market ticker error:", error);
+        if (mounted) setRefreshFailed(true);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -117,6 +130,7 @@ export default function MarketTicker() {
 
   return (
     <section className="group/ticker relative overflow-hidden border-b border-slate-800 bg-[#071019]">
+      {refreshFailed && <p role="status" className="px-4 py-1 text-xs text-amber-300">Refresh failed. Displayed quotes may be stale; check each quote time.</p>}
       <div className="flex min-h-[66px] items-stretch">
         <div className="relative z-20 hidden shrink-0 items-center gap-2 border-r border-slate-800 bg-[#071019] px-5 lg:flex">
           <span className="relative flex h-2.5 w-2.5">
@@ -132,7 +146,7 @@ export default function MarketTicker() {
           <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-[#071019] to-transparent" />
           <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-[#071019] to-transparent" />
 
-          <div className="market-ticker-track flex min-w-max items-stretch group-hover/ticker:[animation-play-state:paused]">
+          <div className="market-ticker-track flex w-max items-stretch">
             {scrollingTickerData.map((ticker, index) => {
               const positive =
                 ticker.changePercent !== null && ticker.changePercent >= 0;
@@ -149,6 +163,8 @@ export default function MarketTicker() {
               return (
                 <div
                   key={`${ticker.symbol}-${index}`}
+                  aria-hidden={index >= tickerData.length ? true : undefined}
+                  title={`${ticker.session === "REGULAR" ? "Regular session versus previous regular close" : "Extended hours versus latest regular close"}. ${formatEasternQuote(ticker.quoteTime)}. Source: ${ticker.regularSource ?? "unavailable"}`}
                   className={`flex min-w-[172px] items-center justify-between gap-5 border-r border-slate-800 px-5 py-3 transition-all duration-500 sm:min-w-[185px] ${flashClass}`}
                 >
                   <div className="min-w-0">
@@ -163,8 +179,10 @@ export default function MarketTicker() {
                       )}
                     </div>
                     <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                      {ticker.symbol === "VIX" ? "Volatility Index" : "Market ETF"}
+                      {ticker.session === "REGULAR" ? "RTH · prior close" : `${ticker.session} · latest RTH close`}
                     </p>
+                    <p className="mt-1 text-[10px] text-slate-400">{formatEasternQuote(ticker.quoteTime)}</p>
+                    {ticker.stale && <p className="text-[10px] text-amber-300">Delayed / stale quote</p>}
                   </div>
 
                   <div className="shrink-0 text-right">

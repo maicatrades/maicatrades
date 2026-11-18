@@ -407,7 +407,7 @@ export default function DashboardSummary({
         </div>
 
        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-  Market Environment
+  Broader Market Backdrop
 </p>
 
         <p
@@ -423,8 +423,22 @@ export default function DashboardSummary({
     ? "Calculating broader market conditions..."
     : scoreUnavailable
       ? "Waiting for verified Market Score data. This card will refresh automatically."
-      : "The broader market trend remains constructive. Check Market Outlook and Today’s Risk for current-session conditions."}
+      : "This score reflects trend and multi-day conditions. Today’s session can move against that backdrop."}
 </p>
+
+        {!marketScoreLoading && !marketPulseLoading && marketPulseSummary && (
+          <p className={`mt-3 pr-5 text-sm font-semibold ${
+            marketPulseSummary.marketTone === "Strong selling pressure" ||
+            marketPulseSummary.marketTone === "Defensive"
+              ? "text-red-300"
+              : marketPulseSummary.marketTone === "Strong buying pressure" ||
+                  marketPulseSummary.marketTone === "Constructive"
+                ? "text-emerald-300"
+                : "text-amber-300"
+          }`}>
+            Today’s session: {marketPulseSummary.marketTone}
+          </p>
+        )}
 
         {!marketScoreLoading && !scoreUnavailable && (
           <div className="mt-4 pr-20">
@@ -619,10 +633,11 @@ export default function DashboardSummary({
             : riskLevel}
         </p>
 
+        <p className="mt-2 text-xs text-slate-400">An unvalidated composite of backdrop and session conditions, not a loss probability. Volatility is a separate measurement.</p>
         <div className="mt-4">
           <div className="mb-2 flex justify-between text-xs">
             <span className="text-slate-500">
-              Risk Score
+              Risk heuristic
             </span>
 
             <span className="font-semibold text-slate-200">

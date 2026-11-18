@@ -4,6 +4,7 @@ import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 
 type CalendarEvent = {
+  date?: string;
   time: string;
   title: string;
   impact: string;
@@ -90,7 +91,7 @@ export default function EconomicCalendar({
                   key={`${event.time}-${event.title}`}
                   className="grid grid-cols-[70px_1fr_auto] items-center gap-3 text-xs"
                 >
-                  <span className="text-slate-500">{event.time}</span>
+                  <span className="text-slate-500">{event.date ? `${event.date} · ` : ""}{event.time} ET</span>
 
                   <span className="line-clamp-2 text-slate-200">
                     {event.title}

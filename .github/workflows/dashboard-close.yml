@@ -1,0 +1,90 @@
+name: Dashboard closing capture and health check
+
+on:
+  schedule:
+    # Covers 1 PM early closes and 4 PM regular closes in EST and EDT.
+    # Runtime exchange-calendar gate controls the actual write window.
+    - cron: '17,37,57 17-23 * * 1-5'
+    # Read-only check of the previous completed session, even after a missed run.
+    - cron: '17 12 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Verify is read-only. Capture writes today only during its closing window.'
+        type: choice
+        options: [verify, capture]
+        default: verify
+  pull_request:
+    paths:
+      - '.github/workflows/dashboard-close.yml'
+      - 'scripts/closing-capture/**'
+      - 'tests/closing-capture.test.mjs'
+      - 'src/lib/market-session.ts'
+      - 'src/lib/score-history.ts'
+      - 'src/app/api/market-score/route.ts'
+      - 'src/app/api/market-breadth/route.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dashboard-closing-capture
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # Deliberately isolated: do not resolve/upgrade OpenNext or the app lockfile.
+      - name: Install pinned calculation runtime
+        run: npm install --prefix "$RUNNER_TEMP/dashboard-runtime" --no-save --package-lock=false --ignore-scripts --no-audit --no-fund @supabase/supabase-js@2.111.0 next@16.2.10 react@19.2.4 react-dom@19.2.4
+      - name: Fixture tests (no production credentials)
+        env:
+          CLOSING_CAPTURE_NODE_MODULES: ${{ runner.temp }}/dashboard-runtime/node_modules
+        run: node --import ./scripts/closing-capture/register.mjs --test tests/closing-capture.test.mjs
+
+  capture:
+    needs: test
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.DASHBOARD_CLOSING_CAPTURE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Determine exchange-session task (offline)
+        id: plan
+        run: node --import ./scripts/closing-capture/register.mjs scripts/closing-capture/run.mjs plan
+      - name: Install pinned calculation runtime
+        if: steps.plan.outputs.phase != 'skip'
+        run: npm install --prefix "$RUNNER_TEMP/dashboard-runtime" --no-save --package-lock=false --ignore-scripts --no-audit --no-fund @supabase/supabase-js@2.111.0 next@16.2.10 react@19.2.4 react-dom@19.2.4
+      - name: Capture or verify the completed session
+        if: steps.plan.outputs.phase != 'skip'
+        env:
+          REQUESTED_MODE: ${{ inputs.mode }}
+          PLANNED_MODE: ${{ steps.plan.outputs.phase }}
+          CLOSING_CAPTURE_ENABLED: 'true'
+          CLOSING_CAPTURE_NODE_MODULES: ${{ runner.temp }}/dashboard-runtime/node_modules
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          mode="$PLANNED_MODE"
+          if [ -n "$REQUESTED_MODE" ]; then mode="$REQUESTED_MODE"; fi
+          node --import ./scripts/closing-capture/register.mjs scripts/closing-capture/run.mjs "$mode"
+      - name: Retain calculation inputs and verification receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-closing-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: closing-capture-output/evidence.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Missing-session alert
+        if: failure()
+        run: echo '::error::Dashboard closing capture needs review. Check the failing step and evidence artifact. Existing finals and historical sessions must not be overwritten.'

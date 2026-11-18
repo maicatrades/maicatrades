@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
+import { isReadOnlyPreview } from "@/lib/read-only-preview";
 import { supabaseAdmin } from "@/lib/supabase";
+import { marketSession } from "@/lib/market-session";
+import { writeBreadthSnapshot } from "@/lib/score-history";
 
 /*
  * Market breadth does not require second-by-second updates.
@@ -409,7 +412,9 @@ async function saveBreadthHistoryAndGetTrend({
   positiveSectors,
   totalSectors,
   positiveSectorPercent,
+  historyComplete,
 }: {
+  historyComplete: boolean;
   tradingDate: string;
   breadthScore: number;
   breadthLabel: string;
@@ -430,10 +435,14 @@ async function saveBreadthHistoryAndGetTrend({
   positiveSectorPercent: number;
 }): Promise<MarketBreadthTrend> {
   try {
-    const { error: upsertError } =
-      await supabaseAdmin
-        .from("market_breadth_history")
-        .upsert(
+    const now = new Date();
+    const session = marketSession(now);
+    const canWrite = !isReadOnlyPreview() && historyComplete && session.isTradingDay && tradingDate === session.tradingDate &&
+      session.minutes >= 570 && session.minutes < session.closeMinutes + 120;
+    // Convert the current ET offset without assuming EST/EDT. Writes only use today's date.
+    const minuteStart = now.getTime() - now.getUTCSeconds()*1000 - now.getUTCMilliseconds();
+    const closeTime = new Date(minuteStart + (session.closeMinutes-session.minutes)*60000).toISOString();
+    if (canWrite) await writeBreadthSnapshot(supabaseAdmin,
           {
             trading_date: tradingDate,
             breadth_score:
@@ -467,14 +476,8 @@ async function saveBreadthHistoryAndGetTrend({
             updated_at:
               new Date().toISOString(),
           },
-          {
-            onConflict: "trading_date",
-          },
+          closeTime,
         );
-
-    if (upsertError) {
-      throw upsertError;
-    }
 
     const {
       data: previousRows,
@@ -1366,6 +1369,8 @@ export async function GET() {
 
     const breadthTrend =
       await saveBreadthHistoryAndGetTrend({
+        historyComplete: validStocks.length === M122_TARGET_SIZE && validStocks.every(stock =>
+          getLatestTradingDate([stock]) === tradingDate),
         tradingDate,
         breadthScore,
         breadthLabel,

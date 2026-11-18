@@ -471,12 +471,13 @@ async function getTickerData(
   }
 
   const regularPrice = regularQuote.c as number;
-  const session = yahooData?.session ?? "REGULAR";
+  const session = ticker.symbol === "VIX" ? "REGULAR" : yahooData?.session ?? "REGULAR";
   const quoteDate = isValidNumber(regularQuote.t) ? marketDate(regularQuote.t) : null;
   // Yahoo's intraday metadata carries the last regular close even when its
   // daily chart has a missing close for the previous session (as on Sep 22).
   // Match quote dates so a cached intraday response cannot supply an old close.
   const regularPreviousClose =
+    ticker.symbol === "VIX" && isValidNumber(regularQuote.pc) && regularQuote.pc > 0 ? regularQuote.pc :
     yahooData && quoteDate !== null &&
     isValidNumber(yahooData.quoteTime) &&
     marketDate(yahooData.quoteTime) === quoteDate

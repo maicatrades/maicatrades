@@ -6,6 +6,7 @@ import {
   Clock3,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { marketSession } from "@/lib/market-session";
 
 const MARKET_TIME_ZONE = "America/New_York";
 
@@ -25,7 +26,8 @@ function getGreeting(date: Date) {
 }
 
 export default function DashboardHeader() {
-  const [greeting, setGreeting] = useState("Good Morning");
+  const [greeting, setGreeting] = useState("Market Dashboard");
+  const [sessionText, setSessionText] = useState("Market context in Eastern Time.");
   const [currentDate, setCurrentDate] = useState("");
   const [currentTime, setCurrentTime] = useState("");
 
@@ -34,6 +36,8 @@ export default function DashboardHeader() {
       const now = new Date();
 
       setGreeting(getGreeting(now));
+      const session = marketSession(now);
+      setSessionText(session.isTradingDay ? `${session.phase} · All times Eastern.` : "Market closed · Review the completed week and prepare for the next trading session.");
 
       setCurrentDate(
         now.toLocaleDateString("en-US", {
@@ -75,7 +79,7 @@ export default function DashboardHeader() {
         </h1>
 
         <p className="mt-1 text-sm text-slate-400">
-          Here&apos;s your market game plan for today.
+          {sessionText}
         </p>
       </div>
 
@@ -92,7 +96,7 @@ export default function DashboardHeader() {
 
         <div className="mt-2 flex items-center gap-2 text-xs text-slate-500 md:justify-end">
           <span>
-            Last updated: {currentTime || "Loading..."}
+            Market clock: {currentTime || "Loading..."}
           </span>
 
           <Clock3 size={13} />
