@@ -9,7 +9,7 @@ export default function TradeIdeaJournalPage(){
  useEffect(()=>{let active=true;fetch("/api/trade-idea/journal",{cache:"no-store"}).then(async r=>{const j=await r.json();if(!r.ok||!j.success)throw Error(j.error||"Journal unavailable");if(active)setData(j)}).catch(e=>{if(active)setError(String(e))});return()=>{active=false}},[]);
  return <main className="min-h-screen bg-[#050b12] px-4 py-10 text-slate-100 md:px-10">
  <div className="mx-auto max-w-6xl"><Link href="/markets/trade-idea" className="text-sm text-blue-400">← Trade Idea</Link>
- <h1 className="mt-5 text-3xl font-bold">Trade Idea Journal</h1><p className="mt-2 text-slate-400">Permanent weekly selections and their recorded outcomes. This page does not alter trade rules or historical records.</p>
+ <h1 className="mt-5 text-3xl font-bold">Trade Idea Journal</h1><Link href="/markets/trade-idea/journal/replay" className="mt-4 inline-block rounded-lg border border-blue-500/50 px-4 py-2 text-sm font-medium text-blue-300 hover:bg-blue-500/10">Review historical replay audit →</Link><p className="mt-2 text-slate-400">Permanent weekly selections and their recorded outcomes. This page does not alter trade rules or historical records.</p>
  {error&&<p role="alert" className="mt-6 text-red-400">{error}</p>}
  {!data&&!error&&<p className="mt-6 text-slate-400">Loading journal…</p>}
  {data&&<><div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">{[
