@@ -32,14 +32,27 @@ export async function GET() {
       const preEntryInvalidation = row.status === "STOPPED_OUT" && !row.entry_triggered_at &&
         (row.outcome_note ?? "").toLowerCase().includes("invalidation");
       const missingEntry = ["STOPPED_OUT", "TARGET_HIT"].includes(row.status) && !row.entry_triggered_at;
-      const staleActive = row.status === "ACTIVE" && !!row.last_checked_at &&
-        Date.now() - new Date(row.last_checked_at).getTime() > 48 * 60 * 60 * 1000;
+      const staleActive = row.status === "ACTIVE" && (!row.last_checked_at ||
+        !Number.isFinite(Date.parse(row.last_checked_at)) ||
+        Date.now() - Date.parse(row.last_checked_at) > 48 * 60 * 60 * 1000);
+      // A daily OHLC candle is timestamped at its session boundary, not at
+      // the precise moment a level was touched. Never count a terminal outcome
+      // when its recorded entry predates publication without review.
+      const entryBeforePublication = !!row.entry_triggered_at &&
+        Number.isFinite(Date.parse(row.entry_triggered_at)) &&
+        Number.isFinite(Date.parse(row.locked_at)) &&
+        Date.parse(row.entry_triggered_at) < Date.parse(row.locked_at);
+      const sameSessionAmbiguity = !!row.entry_triggered_at &&
+        row.entry_triggered_at.slice(0, 10) === row.locked_at.slice(0, 10) &&
+        row.status !== "WAITING_FOR_ENTRY";
       const inconsistentOrder = !!row.entry_triggered_at && (
         (!!row.stopped_out_at && new Date(row.stopped_out_at) < new Date(row.entry_triggered_at)) ||
         (!!row.target_hit_at && new Date(row.target_hit_at) < new Date(row.entry_triggered_at))
       );
       const auditFlag = preEntryInvalidation ? "PRE_ENTRY_INVALIDATION" :
         missingEntry ? "MISSING_ENTRY" : inconsistentOrder ? "EVENT_ORDER" :
+        entryBeforePublication ? "ENTRY_BEFORE_PUBLICATION" :
+        sameSessionAmbiguity ? "SAME_DAY_ENTRY_UNVERIFIED" :
         staleActive ? "STALE_ACTIVE" : null;
       return { ...row, auditFlag, realizedR: auditFlag ? null : outcome(row) };
     });
