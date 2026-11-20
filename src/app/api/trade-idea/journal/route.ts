@@ -28,7 +28,21 @@ export async function GET() {
       .select("id,week_key,symbol,direction,status,entry_price,stop_price,target_price,risk_reward,confidence_score,grade,locked_at,entry_triggered_at,target_hit_at,stopped_out_at,expired_at,needs_review_at,outcome_note,last_checked_at")
       .order("week_key", { ascending: false }).limit(500);
     if (error) throw error;
-    const records = ((data ?? []) as RecordRow[]).map(row => ({ ...row, realizedR: outcome(row) }));
+    const records = ((data ?? []) as RecordRow[]).map(row => {
+      const preEntryInvalidation = row.status === "STOPPED_OUT" && !row.entry_triggered_at &&
+        (row.outcome_note ?? "").toLowerCase().includes("invalidation");
+      const missingEntry = ["STOPPED_OUT", "TARGET_HIT"].includes(row.status) && !row.entry_triggered_at;
+      const staleActive = row.status === "ACTIVE" && !!row.last_checked_at &&
+        Date.now() - new Date(row.last_checked_at).getTime() > 48 * 60 * 60 * 1000;
+      const inconsistentOrder = !!row.entry_triggered_at && (
+        (!!row.stopped_out_at && new Date(row.stopped_out_at) < new Date(row.entry_triggered_at)) ||
+        (!!row.target_hit_at && new Date(row.target_hit_at) < new Date(row.entry_triggered_at))
+      );
+      const auditFlag = preEntryInvalidation ? "PRE_ENTRY_INVALIDATION" :
+        missingEntry ? "MISSING_ENTRY" : inconsistentOrder ? "EVENT_ORDER" :
+        staleActive ? "STALE_ACTIVE" : null;
+      return { ...row, auditFlag, realizedR: auditFlag ? null : outcome(row) };
+    });
     const completed = records.filter(row => row.realizedR !== null);
     const wins = completed.filter(row => (row.realizedR ?? 0) > 0);
     const losses = completed.filter(row => (row.realizedR ?? 0) < 0);
@@ -41,9 +55,9 @@ export async function GET() {
         winRate: completed.length ? wins.length / completed.length : null,
         averageR: completed.length ? (grossWinR - grossLossR) / completed.length : null,
         profitFactor: grossLossR ? grossWinR / grossLossR : null,
-        unresolved: records.length - completed.length,
+        unresolved: records.length - completed.length, flagged: records.filter(row => row.auditFlag).length,
       },
-      caveat: "Modelled level-to-level R only; no execution, slippage, or fees. Ambiguous and untriggered records are excluded from trade statistics.",
+      caveat: "Modelled level-to-level R only; no execution, slippage, or fees. Ambiguous, untriggered, and flagged records are excluded from trade statistics. Flags are read-only and do not modify stored history.",
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Trade Idea journal read failed", error);
