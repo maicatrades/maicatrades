@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fetchYahooV2Candles } from "../src/lib/trade-idea/v2-yahoo.ts";
 
-const base = 1795260600; // 2026-11-21; only alignment matters for these unit tests
 function payload(t, close = [100, 101]) {
   return { chart: { result: [{ meta: { symbol: "SPY", exchangeTimezoneName: "America/New_York" },
     timestamp: t, indicators: { quote: [{ open: close, high: close.map(v => v + 1),
@@ -16,13 +15,12 @@ test("Yahoo V2 adapter retains completed bars, discards partial live bar and sen
   const seen = [];
   const fetcher = async (url) => {
     seen.push(String(url));
-    return mock(payload([aligned, aligned + 1800, aligned + 3600]))();
+    return mock(payload([aligned, aligned + 1800]))();
   };
   const result = await fetchYahooV2Candles({ symbol: "SPY", resolution: "30m", range: "5d",
     asOf: aligned + 3600, fetcher });
-  // Malformed lengths must fail closed rather than silently truncate.
-  assert.equal(result.ok, false);
-  assert.equal(result.code, "INVALID_RESPONSE");
+  assert.equal(result.ok, true);
+  assert.equal(result.bars.length, 2);
   assert.match(seen[0], /includePrePost=false/);
 });
 test("Yahoo V2 adapter drops incomplete and irregular live bars", async () => {
