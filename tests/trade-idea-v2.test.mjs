@@ -40,7 +40,7 @@ function synthetic(){
   earningsWithinFiveSessions:false,asOf:base+46*86400};
 }
 test("scanner fails closed when bar completion time is missing",()=>{
- const input=synthetic(); delete input.fourHour.at(-1).endTimestamp;
+ const input=synthetic(); input.asOf=input.fourHour.at(-1).timestamp+14400; delete input.fourHour.at(-1).endTimestamp;
  assert.deepEqual(evaluateV2Candidate(input).rejectionReasons,["UNCONFIRMED_CANDLE"]);
 });
 test("scanner rejects low liquidity and malformed OHLC",()=>{
