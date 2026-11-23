@@ -6,7 +6,7 @@
  */
 export type V2Direction = "LONG" | "SHORT";
 export type V2Setup = "BREAK_RETEST" | "EMA_CONTINUATION" | "REVERSAL";
-export type V2Bar = { timestamp: number; open: number; high: number; low: number; close: number; volume?: number };
+export type V2Bar = { timestamp: number; open: number; high: number; low: number; close: number; volume?: number; endTimestamp?: number };
 export type V2Input = {
   symbol: string;
   daily: V2Bar[];
@@ -37,7 +37,7 @@ const ema = (values: number[], length: number): number[] => {
   return result;
 };
 const valid = (b: V2Bar) => [b.timestamp, b.open, b.high, b.low, b.close].every(Number.isFinite) &&
-  b.timestamp > 0 && b.low > 0 && b.low <= Math.min(b.open, b.close) &&
+  b.timestamp > 0 && (b.endTimestamp === undefined || (Number.isFinite(b.endTimestamp) && b.endTimestamp > b.timestamp)) && b.low > 0 && b.low <= Math.min(b.open, b.close) &&
   b.high >= Math.max(b.open, b.close);
 const round = (n: number) => Number(n.toFixed(4));
 
