@@ -40,7 +40,7 @@ function synthetic(){
   earningsWithinFiveSessions:false,asOf:base+46*86400};
 }
 test("scanner fails closed when bar completion time is missing",()=>{
- const input=synthetic(); input.asOf=input.fourHour.at(-1).timestamp+14400; delete input.fourHour.at(-1).endTimestamp;
+ const input=synthetic(); delete input.fourHour.at(-1).endTimestamp;
  assert.deepEqual(evaluateV2Candidate(input).rejectionReasons,["UNCONFIRMED_CANDLE"]);
 });
 test("scanner rejects low liquidity and malformed OHLC",()=>{
@@ -54,4 +54,15 @@ test("candidate ranking is deterministic and capped at three",()=>{
   grade:"A",signalBarTime:100,reasons:[],warnings:[],version:"TRADE_IDEA_V2_DRAFT_1"};
  const candidates=["D","B","C","A"].map(symbol=>({...base,symbol,score:90}));
  assert.deepEqual(rankV2Candidates([{candidates,rejectionReasons:[]}]).map(c=>c.symbol),["A","B","C"]);
+});
+
+test("scanner accepts completed 2.5-hour afternoon segment without accepting future closes",()=>{
+ const input=synthetic();
+ const end=input.daily.at(-1).endTimestamp;
+ const start=end-9000;
+ input.fourHour=input.fourHour.map((bar,i)=>({...bar,timestamp:start-(44-i)*14400,endTimestamp:i===44?end:start-(43-i)*14400}));
+ input.asOf=end;
+ assert.ok(!evaluateV2Candidate(input).rejectionReasons.includes("UNCONFIRMED_CANDLE"));
+ input.fourHour.at(-1).endTimestamp=end+1;
+ assert.deepEqual(evaluateV2Candidate(input).rejectionReasons,["UNCONFIRMED_CANDLE"]);
 });
