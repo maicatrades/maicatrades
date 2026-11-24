@@ -55,10 +55,10 @@ export function evaluateV2Candidate(input: V2Input): V2Evaluation {
       new Set(daily.map(b => b.timestamp)).size !== daily.length ||
       new Set(h4.map(b => b.timestamp)).size !== h4.length)
     return { candidates: [], rejectionReasons: ["INVALID_OR_DUPLICATE_BARS"] };
-  // Provider adapters must supply completed bars only; enforce at least 4h since
-  // 4h candle START and at least 24h since daily candle START to fail closed.
-  if (h4[h4.length - 1].timestamp + 4 * 3600 > input.asOf ||
-      daily[daily.length - 1].timestamp > input.asOf)
+  // Exchange-aligned segments can be shorter than four hours.
+  // Require explicit completion evidence on every input bar.
+  if ([...daily, ...h4].some(bar => bar.endTimestamp === undefined ||
+      bar.endTimestamp > input.asOf))
     return { candidates: [], rejectionReasons: ["UNCONFIRMED_CANDLE"] };
   if (input.asOf - h4[h4.length - 1].timestamp > 7 * 86400)
     return { candidates: [], rejectionReasons: ["STALE_4H_DATA"] };
