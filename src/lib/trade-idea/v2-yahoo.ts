@@ -16,13 +16,13 @@ type ChartPayload = {
   }> | null };
 };
 export async function fetchYahooV2Candles(args: {
-  symbol: string; resolution: "30m" | "1d"; range: "5d" | "1mo" | "3mo";
+  symbol: string; resolution: "30m" | "1d"; range: "5d" | "1mo" | "60d" | "3mo";
   asOf: number; fetcher?: typeof fetch;
 }): Promise<YahooV2Result> {
   const { symbol, resolution, range, asOf } = args;
   if (!/^[A-Z][A-Z0-9.\-]{0,14}$/.test(symbol) ||
       !["30m", "1d"].includes(resolution) ||
-      !["5d", "1mo", "3mo"].includes(range) ||
+      !["5d", "1mo", "60d", "3mo"].includes(range) ||
       !Number.isFinite(asOf))
     return { ok: false, code: "INVALID_REQUEST", detail: "Invalid Yahoo candle request." };
   // Yahoo intraday history is limited; do not request 3 months of 30m bars.
@@ -30,7 +30,10 @@ export async function fetchYahooV2Candles(args: {
     return { ok: false, code: "INVALID_REQUEST", detail: "Intraday range exceeds supported research window." };
   const url = new URL(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`);
   url.searchParams.set("interval", resolution);
-  url.searchParams.set("range", range);
+  if (range === "60d") {
+    url.searchParams.set("period1", String(Math.floor(asOf) - 59 * 86400));
+    url.searchParams.set("period2", String(Math.floor(asOf)));
+  } else url.searchParams.set("range", range);
   url.searchParams.set("includePrePost", "false");
   try {
     const response = await (args.fetcher ?? fetch)(url, {
